@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Knock — Cold outreach that lands jobs</title>
+  <meta name="description" content="Knock finds the right people, writes the first line, and times every follow-up — so students and job seekers land opportunities before they hit the boards." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%2316140f'/><path d='M28 22h14v26l22-26h17L52 55l30 23H64L42 60v18H28z' fill='%23ff4d00'/></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- 3D scene lives behind everything -->
+  <canvas id="scene"></canvas>
+  <div class="grain" aria-hidden="true"></div>
+
+  <!-- ===================== NAV ===================== -->
+  <header class="nav">
+    <a class="nav__logo" href="#top" aria-label="Knock home">
+      <span class="nav__mark">✊</span> knock<span class="nav__dot">.</span>
+    </a>
+    <nav class="nav__links">
+      <a href="#problem">Why Knock</a>
+      <a href="#how">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#pricing">Pricing</a>
+    </nav>
+    <div class="nav__cta">
+      <a class="btn btn--ghost" href="#pricing">Sign in</a>
+      <a class="btn btn--primary" href="#cta">Start knocking</a>
+    </div>
+  </header>
+
+  <main id="top">
+
+    <!-- ===================== HERO ===================== -->
+    <section class="hero" data-section="hero">
+      <p class="hero__eyebrow reveal">Cold outreach for your career</p>
+      <h1 class="hero__title" data-split>
+        The best jobs are never posted. <em>Knock&nbsp;anyway.</em>
+      </h1>
+      <p class="hero__sub reveal">
+        Knock finds the right people, writes the first line, and times every
+        follow-up — so high schoolers, students, and job seekers land
+        opportunities before they ever hit the boards.
+      </p>
+      <div class="hero__actions reveal">
+        <a class="btn btn--primary btn--lg" href="#cta">Start free — no resume required</a>
+        <a class="btn btn--ghost btn--lg" href="#how">See it work <span class="btn__arrow">→</span></a>
+      </div>
+      <div class="hero__hint reveal">
+        <span class="hero__scroll-line"></span> scroll — your message is already in flight
+      </div>
+    </section>
+
+    <!-- ===================== MARQUEE ===================== -->
+    <section class="marquee" aria-label="Where Knock users landed">
+      <p class="marquee__label">Knock users have landed interviews &amp; offers at</p>
+      <div class="marquee__track-wrap">
+        <div class="marquee__track">
+          <span>Stripe</span><span>◆</span><span>NASA JPL</span><span>◆</span><span>Figma</span><span>◆</span>
+          <span>Local newsrooms</span><span>◆</span><span>YC startups</span><span>◆</span><span>Deloitte</span><span>◆</span>
+          <span>Research labs</span><span>◆</span><span>Patagonia</span><span>◆</span><span>City Hall</span><span>◆</span>
+          <span>Pixar</span><span>◆</span><span>Small studios</span><span>◆</span><span>Big Four</span><span>◆</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== PROBLEM ===================== -->
+    <section class="problem" id="problem" data-section="problem">
+      <div class="problem__inner">
+        <h2 class="section-title" data-split>Job boards are where applications go to <em>die.</em></h2>
+        <p class="section-sub reveal">
+          You did everything right. You hit “Easy Apply.” So did everyone else.
+        </p>
+        <div class="problem__stats">
+          <div class="stat-card reveal-card">
+            <div class="stat-card__num"><span data-count="250">0</span>+</div>
+            <p>applicants pile up on the average posting within days</p>
+          </div>
+          <div class="stat-card reveal-card">
+            <div class="stat-card__num"><span data-count="2">0</span>%</div>
+            <p>of cold applications ever get a human reply</p>
+          </div>
+          <div class="stat-card reveal-card stat-card--accent">
+            <div class="stat-card__num"><span data-count="80">0</span>%</div>
+            <p>of roles are filled through people — referrals, intros, and one good email</p>
+          </div>
+        </div>
+        <p class="problem__kicker reveal">
+          The fix isn’t a better resume. It’s a <strong>direct line to a real person</strong> —
+          and the nerve to use it. Knock gives you both.
+        </p>
+      </div>
+    </section>
+
+    <!-- ===================== HOW IT WORKS (pinned) ===================== -->
+    <section class="how" id="how" data-section="how">
+      <div class="how__pin">
+        <div class="how__head">
+          <p class="how__eyebrow">How it works</p>
+          <h2 class="section-title">Three knocks to an open door</h2>
+        </div>
+        <div class="how__progress" aria-hidden="true">
+          <div class="how__progress-bar"></div>
+        </div>
+        <div class="how__steps">
+          <article class="how-step" data-step="1">
+            <div class="how-step__num">01</div>
+            <h3>Find the right doors</h3>
+            <p>
+              Tell Knock what you want — “marketing internship,” “first job in
+              aerospace,” “anything in animation.” It builds a list of real,
+              reachable people: recruiters, alumni from your school, hiring
+              managers. Not postings. People.
+            </p>
+            <div class="how-step__visual">
+              <div class="chip-row">
+                <span class="chip chip--on">Alumni · UC Irvine</span>
+                <span class="chip">Recruiters</span>
+                <span class="chip">Hiring managers</span>
+                <span class="chip">2nd-degree intros</span>
+              </div>
+              <ul class="people-list">
+                <li><span class="avatar">MJ</span><div><strong>Maya J.</strong><small>Design recruiter · Figma · replied to 3 students this month</small></div><span class="match">98%</span></li>
+                <li><span class="avatar">RT</span><div><strong>Ravi T.</strong><small>Eng manager · alum ’19 · hires interns every summer</small></div><span class="match">94%</span></li>
+                <li><span class="avatar">EC</span><div><strong>Elena C.</strong><small>Newsroom editor · posted “DM me” last week</small></div><span class="match">91%</span></li>
+              </ul>
+            </div>
+          </article>
+
+          <article class="how-step" data-step="2">
+            <div class="how-step__num">02</div>
+            <h3>Write a first line they’ll answer</h3>
+            <p>
+              Knock drafts a short, personal note from your story and their
+              work — no “Dear Hiring Manager,” no AI sludge. Every word stays
+              yours to edit. Sixty seconds, not sixty minutes.
+            </p>
+            <div class="how-step__visual">
+              <div class="composer">
+                <div class="composer__bar">
+                  <span class="dot dot--r"></span><span class="dot dot--y"></span><span class="dot dot--g"></span>
+                  <span class="composer__to">To: maya@figma.com</span>
+                </div>
+                <div class="composer__body">
+                  <p class="composer__subject">Subj: <span id="type-subject"></span><span class="caret"></span></p>
+                  <p class="composer__text" id="type-body"></p>
+                </div>
+                <div class="composer__foot">
+                  <span class="composer__score">Reply likelihood: <strong>High</strong></span>
+                  <span class="composer__send">Send at 9:41 AM her time ↗</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <article class="how-step" data-step="3">
+            <div class="how-step__num">03</div>
+            <h3>Knock until it opens</h3>
+            <p>
+              Most replies come from the second or third touch — the ones
+              people never send. Knock times polite follow-ups to when your
+              person actually reads email, tracks opens and replies, and tells
+              you the moment a thread turns warm.
+            </p>
+            <div class="how-step__visual">
+              <ul class="timeline">
+                <li class="timeline__item is-done"><span>Tue 9:41a</span> First note sent · opened twice</li>
+                <li class="timeline__item is-done"><span>Fri 8:15a</span> Follow-up #1 · opened</li>
+                <li class="timeline__item is-live"><span>Mon 9:02a</span> 🔥 Maya replied: “Send me your portfolio?”</li>
+                <li class="timeline__item"><span>—</span> Knock drafted your reply. Review &amp; send.</li>
+              </ul>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== FEATURES ===================== -->
+    <section class="features" id="features" data-section="features">
+      <h2 class="section-title" data-split>Built for people with <em>zero</em> network. Yet.</h2>
+      <p class="section-sub reveal">Everything a sales team uses to win deals — repointed at your career.</p>
+      <div class="features__grid">
+        <article class="feature-card tilt reveal-card">
+          <div class="feature-card__icon">🎓</div>
+          <h3>Alumni radar</h3>
+          <p>Surfaces graduates of your school — even your high school — who now work where you want to be. The warmest cold email there is.</p>
+        </article>
+        <article class="feature-card tilt reveal-card">
+          <div class="feature-card__icon">✍️</div>
+          <h3>Story-to-pitch</h3>
+          <p>Turns your resume, projects, or just a paragraph about yourself into a first line that sounds like you on your best day.</p>
+        </article>
+        <article class="feature-card tilt reveal-card">
+          <div class="feature-card__icon">📬</div>
+          <h3>Inbox-safe sending</h3>
+          <p>Warms your address, paces your sends, and keeps you out of spam folders. Persistence, not pestering.</p>
+        </article>
+        <article class="feature-card tilt reveal-card">
+          <div class="feature-card__icon">📡</div>
+          <h3>Reply radar</h3>
+          <p>Open tracking, reply detection, and a “warm threads” inbox so the one email that matters never gets buried.</p>
+        </article>
+        <article class="feature-card tilt reveal-card">
+          <div class="feature-card__icon">⏱</div>
+          <h3>Follow-up autopilot</h3>
+          <p>Schedules the nudges you’d be too nervous to send, timed to when each person actually reads mail. Cancel any of them with one tap.</p>
+        </article>
+        <article class="feature-card tilt reveal-card feature-card--b2b">
+          <div class="feature-card__icon">🏫</div>
+          <h3>Campus dashboard</h3>
+          <p>For career centers &amp; bootcamps: seat management, outcome analytics, and outreach coaching for every student. This is the B2B part.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ===================== TESTIMONIALS ===================== -->
+    <section class="voices" data-section="voices">
+      <h2 class="section-title" data-split>Doors that <em>opened</em></h2>
+      <div class="voices__row">
+        <figure class="voice reveal-card">
+          <blockquote>“I’m 17. I emailed twelve game studios with Knock and got two studio tours and a summer QA internship. My counselor thought I knew somebody. I didn’t.”</blockquote>
+          <figcaption><strong>Dex M.</strong> · high school junior, Ohio</figcaption>
+        </figure>
+        <figure class="voice reveal-card">
+          <blockquote>“120 Easy Applies: zero interviews. 31 Knock emails: 9 replies, 4 calls, 1 offer. I keep the spreadsheet as a souvenir.”</blockquote>
+          <figcaption><strong>Priya S.</strong> · CS senior, UC Irvine</figcaption>
+        </figure>
+        <figure class="voice reveal-card">
+          <blockquote>“Laid off at 41, no network in my new city. Knock found alumni from a bootcamp I did years ago. Hired in 6 weeks.”</blockquote>
+          <figcaption><strong>Tom R.</strong> · career switcher, Denver</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- ===================== PRICING ===================== -->
+    <section class="pricing" id="pricing" data-section="pricing">
+      <h2 class="section-title" data-split>Priced like you’re <em>broke.</em> Because we remember.</h2>
+      <div class="pricing__grid">
+        <article class="price-card reveal-card">
+          <h3>Student</h3>
+          <div class="price-card__price">$0</div>
+          <p class="price-card__note">forever, with a .edu or school email</p>
+          <ul>
+            <li>25 sends / month</li>
+            <li>Alumni radar</li>
+            <li>Story-to-pitch drafts</li>
+            <li>Reply tracking</li>
+          </ul>
+          <a class="btn btn--ghost btn--full" href="#cta">Start free</a>
+        </article>
+        <article class="price-card price-card--hot reveal-card">
+          <div class="price-card__badge">Most popular</div>
+          <h3>Pro</h3>
+          <div class="price-card__price">$19<span>/mo</span></div>
+          <p class="price-card__note">for the full-on job hunt</p>
+          <ul>
+            <li>Unlimited sends</li>
+            <li>Follow-up autopilot</li>
+            <li>Inbox warm-up</li>
+            <li>Warm-threads inbox</li>
+            <li>Priority people data</li>
+          </ul>
+          <a class="btn btn--primary btn--full" href="#cta">Go Pro</a>
+        </article>
+        <article class="price-card reveal-card">
+          <h3>Campus</h3>
+          <div class="price-card__price">Custom</div>
+          <p class="price-card__note">for career centers, bootcamps &amp; districts</p>
+          <ul>
+            <li>Seats for every student</li>
+            <li>Outcomes dashboard</li>
+            <li>Coaching workflows</li>
+            <li>SSO &amp; FERPA-ready</li>
+          </ul>
+          <a class="btn btn--ghost btn--full" href="#cta">Talk to us</a>
+        </article>
+      </div>
+    </section>
+
+    <!-- ===================== FINAL CTA ===================== -->
+    <section class="cta" id="cta" data-section="cta">
+      <h2 class="cta__title" data-split>Somewhere, your future manager’s inbox is quiet. <em>Change that.</em></h2>
+      <form class="cta__form" onsubmit="event.preventDefault(); this.querySelector('button').textContent='✓ Check your inbox'; ">
+        <input type="email" required placeholder="you@school.edu" aria-label="Email address" />
+        <button class="btn btn--primary btn--lg" type="submit">Start knocking — free</button>
+      </form>
+      <p class="cta__small reveal">No credit card. Your first email drafted in under 2 minutes.</p>
+    </section>
+
+  </main>
+
+  <footer class="footer">
+    <div class="footer__brand">knock<span class="nav__dot">.</span></div>
+    <p>Opportunity doesn’t knock. You do.</p>
+    <div class="footer__links">
+      <a href="#problem">Why Knock</a>
+      <a href="#how">How it works</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#top">Privacy</a>
+      <a href="#top">Careers (we reply)</a>
+    </div>
+    <p class="footer__fine">© 2026 Knock Labs, Inc. Be kind in other people’s inboxes.</p>
+  </footer>
+
+  <!-- libs -->
+  <script src="vendor/gsap.min.js"></script>
+  <script src="vendor/ScrollTrigger.min.js"></script>
+  <script src="vendor/lenis.min.js"></script>
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.js" } }
+  </script>
+  <script type="module" src="main.js"></script>
+</body>
+</html>
