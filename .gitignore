@@ -4,7 +4,6 @@ dist/
 out/
 *.log
 /.cache
-package-lock.json
 
 .env
 .env.local
