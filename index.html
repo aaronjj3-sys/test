@@ -41,10 +41,13 @@
       <div class="hero__card">
         <div class="hero__copy">
           <div class="hero__chips reveal">
-            <span class="chip">🤖 Your cold-outreach agent</span>
-            <span class="chip">💼 Jobs</span>
-            <span class="chip">☕ Coffee chats</span>
-            <span class="chip">🏆 Sponsors</span>
+            <span class="chip chip--lead">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="2.5" fill="#5e91bd"/><circle cx="15" cy="12.5" r="1.4" fill="#fff"/></svg>
+              Your cold-outreach agent
+            </span>
+            <span class="chip">Jobs</span>
+            <span class="chip">Coffee chats</span>
+            <span class="chip">Sponsors</span>
           </div>
           <h1 class="hero__title" data-split>Opportunity doesn’t knock. <em>You do.</em></h1>
           <p class="hero__sub reveal">
@@ -74,9 +77,9 @@
             <span class="frame__url">knock.app / dashboard</span>
           </div>
           <img src="assets/ui-dashboard.png" alt="The Knock dashboard: top doors ranked for you, outreach stats, every thread in one place" />
-          <div class="float-chip float-chip--reply" id="chip-reply">🔥 <b>Maya replied</b>, warm thread in your inbox</div>
+          <div class="float-chip float-chip--reply" id="chip-reply"><b>Maya replied</b>, warm thread in your inbox</div>
           <div class="float-chip float-chip--match" id="chip-match"><span class="chip-ring">96%</span> Elena Cruz · YC W26 · <b>hiring ops</b></div>
-          <div class="float-chip float-chip--sent" id="chip-sent">📨 Knock delivered · follow-up planned Day 3</div>
+          <div class="float-chip float-chip--sent" id="chip-sent">Knock delivered · follow-up planned Day 3</div>
         </figure>
       </div>
     </section>
@@ -139,68 +142,50 @@
       </div>
     </section>
 
-    <!-- ===================== BENTO / PRODUCT ===================== -->
-    <section class="bento" id="product">
-      <p class="eyebrow">/02 · The agent</p>
-      <h2 class="section-title" data-split>An agent that <em>actually knocks.</em></h2>
-      <p class="section-sub reveal">Click Knock. Watch Scout research the person, write like you, and work the follow-ups. You approve every word.</p>
-
-      <div class="bento__grid">
-        <article class="bcard bcard--tall reveal-card">
-          <div class="bcard__head">
-            <h3>Watch it draft, live</h3>
-            <p>Scout researches the person, finds the hook, and typewrites a note in your voice, follow-up plan attached. Nothing sends without you.</p>
+    <!-- ===================== SHOWCASE / PRODUCT (pinned 3D) ===================== -->
+    <section class="showcase" id="product">
+      <div class="showcase__pin">
+        <div class="showcase__head">
+          <p class="eyebrow">/02 · The agent</p>
+          <h2 class="section-title" data-split>An agent that <em>actually knocks.</em></h2>
+        </div>
+        <div class="showcase__layout">
+          <div class="showcase__copy">
+            <div class="scopy" data-i="0">
+              <h3>Watch it draft, live</h3>
+              <p>Scout researches the person, finds the hook, and typewrites a note in your voice, follow-up plan attached.</p>
+              <ul><li>Calibrated by your questionnaire: direct &amp; warm, under 120 words</li><li>Nothing sends without your approval</li></ul>
+            </div>
+            <div class="scopy" data-i="1">
+              <h3>People, not postings</h3>
+              <p>Sourced from the YC directory, your alumni network, live hiring signals, and PE/VC rosters.</p>
+              <ul><li>Every row has a live signal, not a stale listing</li><li>Ranked by who will actually answer you</li></ul>
+            </div>
+            <div class="scopy" data-i="2">
+              <h3>Warm threads first</h3>
+              <p>Scout watches every thread and flags the doors that are opening, so the reply that matters never gets buried.</p>
+              <ul><li>Open and reply detection across your inboxes</li><li>One click to let Scout draft the response</li></ul>
+            </div>
+            <div class="scopy" data-i="3">
+              <h3>Every door, one funnel</h3>
+              <p>Drafted, sent, opened, replied, meeting booked. The whole hunt in one view, follow-ups handled.</p>
+              <ul><li>Day 3 and Day 7 nudges, timed to their reading hours</li><li>Then it stops. Persistence, not pestering</li></ul>
+            </div>
+            <div class="showcase__dots" aria-hidden="true">
+              <i class="sdot is-on"></i><i class="sdot"></i><i class="sdot"></i><i class="sdot"></i>
+            </div>
           </div>
-          <img src="assets/ui-drawer.png" alt="The agent drawer: research steps, a personalized draft, follow-up plan and Approve & send" />
-        </article>
-
-        <article class="bcard reveal-card">
-          <div class="bcard__head">
-            <h3>People, not postings</h3>
-            <p>Sourced from the YC directory, your alumni network, live hiring signals, and PE/VC rosters. Ranked by who will actually answer <em>you</em>.</p>
+          <div class="showcase__stage" id="stage">
+            <div class="stage__inner" id="stage-inner">
+              <figure class="sframe is-on" data-i="0"><img src="assets/ui-drawer.png" alt="The agent drawer drafting a personalized email" /></figure>
+              <figure class="sframe" data-i="1"><img src="assets/ui-people.png" alt="The people directory with live signals and match scores" /></figure>
+              <figure class="sframe" data-i="2"><img src="assets/ui-inbox.png" alt="The inbox with a warm reply flagged" /></figure>
+              <figure class="sframe" data-i="3"><img src="assets/ui-tracker.png" alt="The outreach funnel tracker" /></figure>
+            </div>
+            <div class="stage__chip stage__chip--a" id="schip-a">Reply likelihood: High</div>
+            <div class="stage__chip stage__chip--b" id="schip-b">Send at 9:41 AM her time</div>
           </div>
-          <img src="assets/ui-person.png" alt="A sourced person card with live signal and match score" />
-        </article>
-
-        <article class="bcard reveal-card">
-          <div class="bcard__head">
-            <h3>Warm threads first</h3>
-            <p>Scout watches every thread and flags the doors that are opening, so the reply that matters never gets buried.</p>
-          </div>
-          <img src="assets/ui-inbox.png" alt="The Knock inbox with a warm reply flagged" />
-        </article>
-
-        <article class="bcard bcard--wide reveal-card">
-          <div class="bcard__head">
-            <h3>Every door, one board</h3>
-            <p>Drafted → Sent → Opened → Replied → Meeting booked. Drag cards as life happens; Scout retimes the follow-ups to match.</p>
-          </div>
-          <img src="assets/ui-tracker.png" alt="Kanban tracker of all outreach stages" />
-        </article>
-
-        <article class="bcard bcard--blue reveal-card">
-          <div class="bcard__head">
-            <h3>It sounds like you. On your best day.</h3>
-            <p>A two-minute questionnaire (<em>“allergic to average, will do whatever it takes”</em>) calibrates every draft. No “Dear Hiring Manager.” No AI sludge.</p>
-          </div>
-          <div class="voicecard">
-            <span>Tone locked</span><b>Direct &amp; warm · under 120 words</b>
-            <span>Hook strategy</span><b>Lead with the $400K founder story</b>
-            <span>Send window</span><b>Their reading hours · never weekends</b>
-          </div>
-        </article>
-
-        <article class="bcard bcard--soft reveal-card">
-          <div class="bcard__head">
-            <h3>Persistence, not pestering</h3>
-            <p>Two polite nudges, timed to when they read mail. Then it stops and points you at the next-best door instead.</p>
-          </div>
-          <ul class="fplan">
-            <li><b>Day 0</b> The knock: one hook, one proof point, one ask</li>
-            <li><b>Day 3</b> Nudge with a new proof point</li>
-            <li><b>Day 7</b> Final note, different angle. Then silence.</li>
-          </ul>
-        </article>
+        </div>
       </div>
     </section>
 
@@ -232,7 +217,6 @@
 
     <!-- ===================== VOICES ===================== -->
     <section class="voices" id="voices">
-      <p class="eyebrow">/04 · Receipts</p>
       <h2 class="section-title" data-split>Doors that <em>opened</em></h2>
       <div class="voices__row">
         <figure class="voice reveal-card">
@@ -252,7 +236,7 @@
 
     <!-- ===================== PRICING ===================== -->
     <section class="pricing" id="pricing">
-      <p class="eyebrow">/05 · Pricing</p>
+      <p class="eyebrow">/04 · Pricing</p>
       <h2 class="section-title" data-split>Priced like you’re <em>broke.</em> Because we remember.</h2>
       <div class="pricing__grid">
         <article class="price reveal-card">
@@ -282,16 +266,18 @@
 
     <!-- ===================== CAREERS + CONTACT ===================== -->
     <section class="join" id="careers">
-      <p class="eyebrow">/06 · Say hi</p>
+      <p class="eyebrow">/05 · Say hi</p>
       <h2 class="section-title" data-split>Work with us. Or just <em>knock.</em></h2>
       <div class="join__grid">
         <div class="jcard reveal-card">
           <h3>Careers</h3>
           <p>We are a tiny team teaching students to kick down doors. Practice what you preach: cold email us and we will actually read it.</p>
           <ul class="roles">
-            <li><div><b>Founding engineer</b><small>Remote / Irvine, CA · full-time</small></div><a class="btn btn--sm" href="mailto:careers@knock.app?subject=Founding%20engineer%20(I'm%20knocking)">Apply</a></li>
-            <li><div><b>Growth intern</b><small>Remote · paid, part-time, students welcome</small></div><a class="btn btn--sm" href="mailto:careers@knock.app?subject=Growth%20intern%20(I'm%20knocking)">Apply</a></li>
-            <li><div><b>Campus lead, UCI</b><small>Irvine, CA · equity + free Pro</small></div><a class="btn btn--sm" href="mailto:careers@knock.app?subject=Campus%20lead%20(I'm%20knocking)">Apply</a></li>
+            <li><div><b>Founding UI/UX Designer</b><small>Remote / Irvine, CA · full-time · equity-heavy</small></div><a class="btn btn--sm" href="mailto:careers@knock.app?subject=Founding%20UI%2FUX%20Designer%20(I'm%20knocking)">Apply</a></li>
+            <li><div><b>Founding Full-stack Developer</b><small>Remote / Irvine, CA · full-time · equity-heavy</small></div><a class="btn btn--sm" href="mailto:careers@knock.app?subject=Founding%20Full-stack%20Developer%20(I'm%20knocking)">Apply</a></li>
+            <li><div><b>Founding Growth Marketer</b><small>Remote · full-time or fractional</small></div><a class="btn btn--sm" href="mailto:careers@knock.app?subject=Founding%20Growth%20Marketer%20(I'm%20knocking)">Apply</a></li>
+            <li><div><b>Campus Lead, UCI</b><small>Irvine, CA · part-time · equity + free Pro</small></div><a class="btn btn--sm" href="mailto:careers@knock.app?subject=Campus%20Lead%20(I'm%20knocking)">Apply</a></li>
+            <li><div><b>Your role isn't listed</b><small>Convince us. The right person beats the right req</small></div><a class="btn btn--sm" href="mailto:careers@knock.app?subject=The%20role%20you%20didn't%20know%20you%20needed">Knock</a></li>
           </ul>
           <p class="roles__fine">No resume required. One great first line beats ten bullet points.</p>
         </div>

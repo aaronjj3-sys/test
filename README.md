@@ -18,16 +18,18 @@ Zero-build SPA (vanilla JS, hash routing). Flows that work today:
   the agent's writing voice
 - **Dashboard**, Tsenta-style pastel top-match cards with match rings, stat row
   (sent / open rate / replies / meetings), all-outreach table, "Knock on all 5"
-- **Find people**, directory sourced from YC / alumni / live hiring signals / PE-VC,
-  filterable by source and ask (jobs · coffee chats · case-comp sponsors), each card
-  shows a live "signal" and a match ring
+- **Find people**, a clean table sourced from YC / alumni / live hiring signals / PE-VC
+  with real company logos (favicon service + lettermark fallback), live signals, and
+  match rings
 - **The agent drawer (the wow)**, click *Knock* and Scout visibly researches the
   person, finds the hook, drafts a personalized email typewriter-style in your voice,
   shows the follow-up plan, and waits for *Approve & send*
 - **Simulated life**, after sending: an "opened" toast at ~9s, then a reply at ~19s
   that lands as a 🔥 warm thread in the Inbox and advances the Tracker
-- **Inbox**, warm-threads-first, Scout can draft replies
-- **Tracker**, drag-and-drop kanban: Drafted → Sent → Opened → Replied → Meeting
+- **Inbox**, warm-threads-first with a Connections hub (Gmail, Google Calendar,
+  Outlook, LinkedIn), Scout can draft replies
+- **Tracker**, Jobright-style funnel tabs with counts, a segmented pipeline bar, and
+  stage-specific actions (nudge, follow up, open thread, prep brief)
 - **Profile**, everything the agent knows about you, inline-editable story, traits,
   voice settings
 - **Settings**, agent autonomy toggles, Gmail/Calendar integrations, plan & knocks
@@ -42,8 +44,9 @@ type, thick ink borders with offset "pop" shadows, hover pop-outs everywhere.
   the real app dashboard popping out of it, parallax floating UI chips, and a
   paper-plane doodle riding a dashed path on scroll
 - Knocky the mascot skates across the stats strip on scroll and kickflips on click
-- Numbered /01-/06 sections: stats face-off, bento grid of live app screenshots,
-  sticky how-it-works, testimonials, pricing, merged Careers + Contact section
+- Numbered sections: stats face-off, a pinned 3D product tour that page-turns through
+  live app screenshots as you scroll, sticky how-it-works, centered testimonials,
+  pricing, merged Careers + Contact section
 - Blue footer with working link columns (Privacy and Terms are real pages) and a
   giant stacked KNOCK wordmark that ripples letter-by-letter on hover
 - Respects prefers-reduced-motion

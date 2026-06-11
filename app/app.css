@@ -504,3 +504,88 @@ tbody tr:hover { background: var(--accent-soft); }
   .profile-grid { grid-template-columns: 1fr; }
   .board { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ============ v3: icons, people table, funnel, connections ============ */
+.icn { display: inline-flex; vertical-align: -3px; }
+.icn svg { width: 15px; height: 15px; }
+.topbar__streak { display: inline-flex; align-items: center; gap: 0.45rem; }
+.topbar__streak i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); display: inline-block; }
+
+/* status: clean dot + text, no boxes */
+.st { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; font-weight: 700; color: var(--ink); }
+.st i { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.st--drafted i { background: var(--ink-faint); }
+.st--sent i { background: #d9a514; }
+.st--opened i { background: #7a68c9; }
+.st--replied i { background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
+.st--meeting i { background: var(--accent-deep); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* ask: minimal icon + label */
+.ask { display: inline-flex; align-items: center; gap: 0.45rem; font-size: 0.76rem; font-weight: 600; color: var(--ink-soft); white-space: nowrap; }
+.ask .icn svg { width: 14px; height: 14px; opacity: 0.75; }
+
+/* company logo with lettermark fallback underneath */
+.co-logo {
+  position: relative; flex: none; border-radius: 8px; overflow: hidden;
+  border: 1.5px solid var(--line); background: var(--panel);
+  display: grid; place-items: center;
+}
+.co-logo b { font-size: 0.7rem; color: var(--ink-soft); }
+.co-logo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; padding: 3px; background: #fff; }
+
+/* people table */
+.people-table tbody tr { animation: rise 0.4s ease both; }
+.people-table td { vertical-align: middle; }
+.cell-role { font-weight: 600; font-size: 0.84rem; margin-bottom: 0.2rem; }
+.cell-co { display: flex; align-items: center; gap: 0.6rem; font-size: 0.85rem; }
+.cell-co strong { font-weight: 800; }
+.cell-signal { display: flex; flex-direction: column; gap: 0.3rem; max-width: 300px; }
+.cell-signal small { color: var(--ink-soft); font-size: 0.74rem; line-height: 1.35; }
+.cell-actions { display: flex; gap: 0.45rem; justify-content: flex-end; }
+
+/* header row with action button */
+.vh--row { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+
+/* connections modal */
+.connlist { display: flex; flex-direction: column; }
+.connrow { display: flex; align-items: center; gap: 0.9rem; padding: 0.85rem 0; border-bottom: 1px solid var(--line); }
+.connrow:last-child { border-bottom: none; }
+.connrow .ico { width: 38px; height: 38px; border-radius: 12px; background: var(--panel); border: 1.5px solid var(--border); display: grid; place-items: center; flex: none; }
+.connrow .ico svg { width: 17px; height: 17px; fill: var(--ink-soft); }
+.connrow strong { font-size: 0.88rem; font-weight: 800; display: block; }
+.connrow small { color: var(--ink-faint); font-size: 0.72rem; font-weight: 500; }
+.connrow .end { margin-left: auto; }
+.connlist__fine { font-size: 0.74rem; color: var(--ink-faint); font-weight: 600; margin-top: 0.8rem; }
+
+/* funnel tabs (Jobright-style) */
+.funnel-tabs { display: flex; gap: 0.7rem; flex-wrap: wrap; margin-bottom: 0.9rem; }
+.ftab {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 0.1rem;
+  min-width: 108px; padding: 0.7rem 1rem;
+  background: var(--card); border: 1.5px solid var(--border); border-radius: 14px;
+  box-shadow: 2px 2px 0 var(--border); cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s, background 0.15s;
+}
+.ftab:hover { transform: translate(-2px, -2px); box-shadow: 4px 4px 0 var(--border); }
+.ftab b { font-size: 1.3rem; font-weight: 900; letter-spacing: -0.02em; }
+.ftab span { font-size: 0.7rem; font-weight: 700; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.05em; }
+.ftab.is-on { background: var(--accent); color: #fff; }
+.ftab.is-on span { color: #dcebf7; }
+
+.funnel-bar {
+  display: flex; gap: 3px; height: 12px; border-radius: 99px; overflow: hidden;
+  border: 1.5px solid var(--border); background: var(--panel); margin-bottom: 1.3rem;
+}
+.funnel-bar i { display: block; }
+.fb--drafted { background: #c4ccd4; }
+.fb--sent { background: #ecc94f; }
+.fb--opened { background: #9c8fd9; }
+.fb--replied { background: #4f9e78; }
+.fb--meeting { background: var(--accent); }
+
+/* icon sizing inside existing shells */
+.astep .ico svg { width: 15px; height: 15px; fill: var(--ink-soft); }
+.setrow .ico svg { width: 17px; height: 17px; fill: var(--ink-soft); }
+.sentstamp .big { display: inline-grid; place-items: center; width: 64px; height: 64px; border-radius: 50%; background: var(--accent-soft); border: 2px solid var(--border); }
+.sentstamp .big svg { width: 28px; height: 28px; fill: var(--accent-deep); }
+.dropzone .icn svg { width: 18px; height: 18px; fill: currentColor; }

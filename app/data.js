@@ -36,7 +36,7 @@ const PROFILE = {
 /* why[] = personalization hooks the agent "found"; signal = recent activity */
 const CONTACTS = [
   {
-    id: "maya", name: "Maya Jensen", initials: "MJ", role: "Design Recruiter", company: "Figma",
+    id: "maya", domain: "figma.com", name: "Maya Jensen", initials: "MJ", role: "Design Recruiter", company: "Figma",
     source: "hiring", type: "job", match: 96, location: "San Francisco, CA", color: "lavender",
     tags: ["Replied to 3 students this month", "Owns intern pipeline"],
     signal: "Posted 2d ago: “our intern class ships real features”",
@@ -44,7 +44,7 @@ const CONTACTS = [
     email: "maya@figma.com",
   },
   {
-    id: "ravi", name: "Ravi Tran", initials: "RT", role: "Eng Manager · UCI alum '19", company: "Stripe",
+    id: "ravi", domain: "stripe.com", name: "Ravi Tran", initials: "RT", role: "Eng Manager · UCI alum '19", company: "Stripe",
     source: "alumni", type: "coffee", match: 94, location: "South Bay, CA", color: "mint",
     tags: ["UCI alum", "Hires interns every summer"],
     signal: "Alum, Paul Merage mentor list, active this quarter",
@@ -52,7 +52,7 @@ const CONTACTS = [
     email: "ravi.tran@stripe.com",
   },
   {
-    id: "elena", name: "Elena Cruz", initials: "EC", role: "Founder & CEO", company: "Lattice Robotics (YC W26)",
+    id: "elena", domain: "latticerobotics.com", name: "Elena Cruz", initials: "EC", role: "Founder & CEO", company: "Lattice Robotics (YC W26)",
     source: "yc", type: "job", match: 91, location: "Remote", color: "blush",
     tags: ["YC W26", "Founding team of 5", "Hiring ops generalist"],
     signal: "YC directory: “first ops hire” listed 5 days ago",
@@ -60,7 +60,7 @@ const CONTACTS = [
     email: "elena@latticerobotics.com",
   },
   {
-    id: "marcus", name: "Marcus Webb", initials: "MW", role: "VP, Private Equity", company: "Harbor Crest Capital",
+    id: "marcus", domain: "harborcrest.com", name: "Marcus Webb", initials: "MW", role: "VP, Private Equity", company: "Harbor Crest Capital",
     source: "vc", type: "coffee", match: 88, location: "Newport Beach, CA", color: "butter",
     tags: ["20 min from campus", "Spoke at Merage last fall"],
     signal: "Firm just closed Fund III ($240M)",
@@ -68,7 +68,7 @@ const CONTACTS = [
     email: "mwebb@harborcrest.com",
   },
   {
-    id: "dana", name: "Dana Kim", initials: "DK", role: "Head of Talent", company: "Anduril",
+    id: "dana", domain: "anduril.com", name: "Dana Kim", initials: "DK", role: "Head of Talent", company: "Anduril",
     source: "hiring", type: "job", match: 87, location: "Costa Mesa, CA", color: "lavender",
     tags: ["12 intern reqs open", "Likes portfolio links"],
     signal: "Opened 12 Summer '27 intern roles this week",
@@ -76,7 +76,7 @@ const CONTACTS = [
     email: "dkim@anduril.com",
   },
   {
-    id: "sofia", name: "Sofia Marin", initials: "SM", role: "Case Comp Director", company: "Deloitte, SoCal",
+    id: "sofia", domain: "deloitte.com", name: "Sofia Marin", initials: "SM", role: "Case Comp Director", company: "Deloitte, SoCal",
     source: "hiring", type: "case", match: 85, location: "Los Angeles, CA", color: "mint",
     tags: ["Runs national case comp", "Sponsors student orgs"],
     signal: "Sponsorship apps open for Spring cycle",
@@ -84,7 +84,7 @@ const CONTACTS = [
     email: "smarin@deloitte.com",
   },
   {
-    id: "jonas", name: "Jonas Feld", initials: "JF", role: "Co-founder", company: "Paperplane Health (YC S25)",
+    id: "jonas", domain: "paperplane.health", name: "Jonas Feld", initials: "JF", role: "Co-founder", company: "Paperplane Health (YC S25)",
     source: "yc", type: "job", match: 84, location: "Remote", color: "blush",
     tags: ["YC S25", "Solo on growth"],
     signal: "Tweeted: “drowning in growth ops, send help”",
@@ -92,7 +92,7 @@ const CONTACTS = [
     email: "jonas@paperplane.health",
   },
   {
-    id: "grace", name: "Grace Obi", initials: "GO", role: "Strategy Manager · UCI alum '21", company: "Disney",
+    id: "grace", domain: "disney.com", name: "Grace Obi", initials: "GO", role: "Strategy Manager · UCI alum '21", company: "Disney",
     source: "alumni", type: "coffee", match: 83, location: "Burbank, CA", color: "butter",
     tags: ["UCI alum", "Was a Merage TA"],
     signal: "Promoted to Strategy Manager 3 weeks ago",
@@ -100,7 +100,7 @@ const CONTACTS = [
     email: "grace.obi@disney.com",
   },
   {
-    id: "theo", name: "Theo Brandt", initials: "TB", role: "Hiring Manager, BizOps", company: "Ramp",
+    id: "theo", domain: "ramp.com", name: "Theo Brandt", initials: "TB", role: "Hiring Manager, BizOps", company: "Ramp",
     source: "hiring", type: "job", match: 82, location: "New York, NY", color: "lavender",
     tags: ["Posted role 5h ago", "Python required"],
     signal: "BizOps intern req opened 5 hours ago",
@@ -108,7 +108,7 @@ const CONTACTS = [
     email: "theo.brandt@ramp.com",
   },
   {
-    id: "lina", name: "Lina Park", initials: "LP", role: "Partner", company: "Westcliff Ventures",
+    id: "lina", domain: "westcliff.vc", name: "Lina Park", initials: "LP", role: "Partner", company: "Westcliff Ventures",
     source: "vc", type: "coffee", match: 80, location: "Irvine, CA", color: "mint",
     tags: ["Invests in student founders", "Office hours monthly"],
     signal: "Announced campus office hours for winter",
@@ -116,7 +116,7 @@ const CONTACTS = [
     email: "lina@westcliff.vc",
   },
   {
-    id: "omar", name: "Omar Haddad", initials: "OH", role: "Founder", company: "Fieldnote AI (YC W26)",
+    id: "omar", domain: "fieldnote.ai", name: "Omar Haddad", initials: "OH", role: "Founder", company: "Fieldnote AI (YC W26)",
     source: "yc", type: "job", match: 79, location: "San Diego, CA", color: "blush",
     tags: ["YC W26", "Hiring founding analyst"],
     signal: "YC directory: founding analyst role, equity-heavy",
@@ -124,7 +124,7 @@ const CONTACTS = [
     email: "omar@fieldnote.ai",
   },
   {
-    id: "nina", name: "Nina Castellanos", initials: "NC", role: "Campus Recruiter", company: "EY",
+    id: "nina", domain: "ey.com", name: "Nina Castellanos", initials: "NC", role: "Campus Recruiter", company: "EY",
     source: "hiring", type: "case", match: 76, location: "Irvine, CA", color: "butter",
     tags: ["Owns UCI relationship", "Sponsors case comps"],
     signal: "Booking spring campus events now",
@@ -132,7 +132,7 @@ const CONTACTS = [
     email: "nina.castellanos@ey.com",
   },
   {
-    id: "petra", name: "Petra Vogel", initials: "PV", role: "COO", company: "Brightline Logistics",
+    id: "petra", domain: "brightline.co", name: "Petra Vogel", initials: "PV", role: "COO", company: "Brightline Logistics",
     source: "vc", type: "job", match: 74, location: "Long Beach, CA", color: "lavender",
     tags: ["PE-backed", "Scaling ops team"],
     signal: "Company acquired by Harbor Crest in Oct",
@@ -177,7 +177,7 @@ const SEED_THREADS = [
   },
   {
     contactId: "grace", unread: false, warm: false, when: "Tue",
-    subject: "congrats on Strategy Manager 🎉",
+    subject: "congrats on Strategy Manager",
     messages: [
       { from: "you", time: "Tue, 9:02 AM",
         text: "Grace, saw the promotion to Strategy Manager, congrats! You TA'd my strategy class section two years ago (I was the one who kept asking about Disney+ bundling economics). Would love 15 minutes to hear what the jump from senior analyst was like." },
@@ -188,10 +188,10 @@ const SEED_THREADS = [
 /* Agent run script, steps rendered with delays in the drawer */
 function agentScript(c) {
   return [
-    { icon: "🔎", label: `Researching ${c.name.split(" ")[0]}`, detail: `Reading ${c.company} site, recent posts, ${c.source === "yc" ? "YC directory entry" : c.source === "alumni" ? "alumni database" : "open roles & team page"}…`, ms: 1400 },
-    { icon: "🧠", label: "Finding the hook", detail: c.why[0], ms: 1300 },
-    { icon: "🪞", label: "Matching your story", detail: c.why[1] || "Mapping your experience to what they need right now", ms: 1300 },
-    { icon: "✍️", label: "Drafting in your voice", detail: `${PROFILE.voice.tone} · ${PROFILE.voice.length}`, ms: 1500 },
+    { icon: "search", label: `Researching ${c.name.split(" ")[0]}`, detail: `Reading ${c.company} site, recent posts, ${c.source === "yc" ? "YC directory entry" : c.source === "alumni" ? "alumni database" : "open roles & team page"}…`, ms: 1400 },
+    { icon: "hook", label: "Finding the hook", detail: c.why[0], ms: 1300 },
+    { icon: "story", label: "Matching your story", detail: c.why[1] || "Mapping your experience to what they need right now", ms: 1300 },
+    { icon: "pen", label: "Drafting in your voice", detail: `${PROFILE.voice.tone} · ${PROFILE.voice.length}`, ms: 1500 },
   ];
 }
 
@@ -206,7 +206,7 @@ function draftEmail(c) {
     dana: "Anduril intern reqs, 15 min from campus",
     sofia: "UCI x Deloitte case comp, sponsorship",
     jonas: "saw your growth-ops tweet. send help = me",
-    grace: "congrats on Strategy Manager 🎉",
+    grace: "congrats on Strategy Manager",
     theo: "BizOps req (5h old), early applicant",
     lina: "student founder, $400K ARR, office hours?",
     omar: "founding analyst, I'm in San Diego too",
