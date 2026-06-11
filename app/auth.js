@@ -7,7 +7,30 @@
   const cfg = window.KNOCK_CONFIG;
   const hasSupabase = cfg && cfg.supabaseUrl && !cfg.supabaseUrl.includes("YOUR-PROJECT") && window.supabase;
 
-  window.knockAuth = { mode: "dev", user: null, client: null, signOut: () => {} };
+  function clearLocalSession() {
+    localStorage.removeItem("knock_doors");
+    localStorage.removeItem("knock_doors_meta");
+    localStorage.removeItem("knock_campaigns");
+    localStorage.removeItem("knock_onboarded");
+    localStorage.removeItem("knock_ob_draft");
+    Object.keys(localStorage)
+      .filter((key) => key.startsWith("knock_auto_sourced_"))
+      .forEach((key) => localStorage.removeItem(key));
+  }
+
+  function returnToLanding() {
+    location.href = "../index.html?logout=1";
+  }
+
+  window.knockAuth = {
+    mode: "dev",
+    user: null,
+    client: null,
+    signOut: () => {
+      clearLocalSession();
+      returnToLanding();
+    },
+  };
 
   if (!hasSupabase) {
     /* dev fallback: keep the demo usable without credentials */
@@ -22,13 +45,8 @@
   window.knockAuth.signOut = async () => {
     await client.auth.signOut();
     window.knockAuth.user = null;
-    localStorage.removeItem("knock_doors");
-    localStorage.removeItem("knock_doors_meta");
-    localStorage.removeItem("knock_campaigns");
-    Object.keys(localStorage)
-      .filter((key) => key.startsWith("knock_auto_sourced_"))
-      .forEach((key) => localStorage.removeItem(key));
-    location.href = "../index.html?logout=1";
+    clearLocalSession();
+    returnToLanding();
   };
 
   function gate() {
