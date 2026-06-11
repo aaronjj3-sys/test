@@ -56,14 +56,41 @@ type, thick ink borders with offset "pop" shadows, hover pop-outs everywhere.
 No build step. Libraries are vendored (`vendor/`).
 
 ```bash
-python3 -m http.server 8000
+node server.js     # serves the site AND the /api routes (Apollo sourcing etc.)
 # landing:  http://localhost:8000
 # app:      http://localhost:8000/app/
+npm test           # sourcing/scoring checks
 ```
+
+Copy `.env.example` → `.env.local` and add `APOLLO_API_KEY` for live sourcing;
+without it the app runs in clearly-labeled mock mode. See `SETUP.md` for the
+full go-live checklist (Supabase auth, Google/LinkedIn login, Gmail, Stripe).
+
+## The live MVP layer
+
+- **Dashboard state machine**: ghost ("No doors found yet") → sourcing
+  (agent step list) → doors queue (checkboxes, match reasons, draft previews,
+  Approve & Launch) → campaign queued (honest "Gmail not connected" banner)
+- **Apollo sourcing** (`lib/apollo/`): server-side client (timeout, 429
+  backoff, no key leakage), People Search (credit-free) → normalize → score
+  0–100 with reasons → deterministic draft previews; enrichment is opt-in and
+  capped at 10
+- **API routes** (`api/`): `test-apollo`, `sourcing/apollo`, `sourcing/mock`,
+  `dashboard/doors`, `campaigns/create` — Vercel-compatible handlers, served
+  locally by `server.js`
+- **Auth** (`app/auth.js`): Supabase login gate (Google, LinkedIn OIDC, email
+  magic link) when `app/config.js` exists; dev mode otherwise
+- **Onboarding**: paste resume → deterministic win/school extraction → target
+  path / people / location / tone chips → saved profile powers sourcing
+- **Supabase schema**: `supabase/migrations/001_init.sql` (profiles, doors,
+  campaigns, messages, oauth connections — all with RLS)
 
 ## Files
 
 - `index.html` / `styles.css` / `main.js`, landing page (+ `privacy.html`, `terms.html`)
-- `app/`, the dashboard MVP (`index.html`, `app.css`, `app.js`, `data.js`)
-- `assets/`, app UI screenshots used by the landing page
-- `vendor/`, GSAP, ScrollTrigger, Lenis
+- `app/`, the dashboard MVP (`index.html`, `app.css`, `app.js`, `data.js`, `auth.js`)
+- `api/` + `lib/` + `server.js`, the backend (Apollo sourcing, campaigns, mock mode)
+- `supabase/migrations/`, database schema with RLS
+- `assets/`, app UI screenshots + `assets/logos/` brand SVGs for the marquee
+- `vendor/`, GSAP, ScrollTrigger, Lenis, supabase-js
+- `SETUP.md`, the go-live checklist (what only you can do)

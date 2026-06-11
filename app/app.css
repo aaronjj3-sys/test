@@ -589,3 +589,93 @@ tbody tr:hover { background: var(--accent-soft); }
 .sentstamp .big { display: inline-grid; place-items: center; width: 64px; height: 64px; border-radius: 50%; background: var(--accent-soft); border: 2px solid var(--border); }
 .sentstamp .big svg { width: 28px; height: 28px; fill: var(--accent-deep); }
 .dropzone .icn svg { width: 18px; height: 18px; fill: currentColor; }
+
+/* ============ live dashboard: ghost / sourcing / doors queue ============ */
+.ghost {
+  text-align: center; max-width: 560px; margin: 8vh auto 0; padding: 3rem 2.2rem;
+  background: var(--card, #fff); border: 2px solid var(--border); border-radius: 26px;
+  box-shadow: 4px 4px 0 var(--border);
+}
+.ghost__icon {
+  display: inline-grid; place-items: center; width: 64px; height: 64px; border-radius: 50%;
+  background: var(--accent-soft); border: 2px solid var(--border); margin-bottom: 1.1rem;
+}
+.ghost__icon svg { width: 26px; height: 26px; fill: var(--accent-deep); }
+.ghost__icon--spin svg { animation: ghostspin 1.6s linear infinite; }
+@keyframes ghostspin { to { transform: rotate(360deg); } }
+.ghost h2 { font-size: 1.45rem; letter-spacing: -0.02em; }
+.ghost > p { color: var(--ink-soft); font-size: 0.92rem; margin: 0.5rem auto 1.4rem; max-width: 40ch; }
+.ghost__modes { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center; margin-bottom: 1.4rem; }
+.ghost__fine { margin-top: 1.1rem; font-size: 0.78rem; color: var(--ink-faint); }
+.ghost__fine a { color: var(--accent-deep); font-weight: 700; }
+.ghost code { background: var(--panel); padding: 0.1em 0.4em; border-radius: 6px; font-size: 0.85em; }
+
+.srcsteps { list-style: none; text-align: left; max-width: 340px; margin: 0 auto; display: flex; flex-direction: column; gap: 0.65rem; }
+.srcsteps li { font-size: 0.9rem; font-weight: 600; color: var(--ink-faint); padding-left: 1.6rem; position: relative; transition: color 0.3s; }
+.srcsteps li::before {
+  content: ""; position: absolute; left: 0; top: 0.18em; width: 13px; height: 13px;
+  border-radius: 50%; border: 2px solid var(--ink-faint); transition: all 0.3s;
+}
+.srcsteps li.is-on { color: var(--ink); }
+.srcsteps li.is-on::before { border-color: var(--accent); background: var(--accent-soft); animation: pulse 1s ease-in-out infinite alternate; }
+.srcsteps li.is-done { color: var(--ink-soft); }
+.srcsteps li.is-done::before { border-color: var(--green); background: var(--green); }
+@keyframes pulse { to { transform: scale(1.25); } }
+
+.qbanner {
+  display: flex; align-items: center; gap: 1rem;
+  background: var(--accent-soft); border: 2px solid var(--border); border-radius: 18px;
+  box-shadow: 3px 3px 0 var(--border); padding: 1rem 1.3rem; margin-bottom: 1.6rem;
+}
+.qbanner > div:first-child svg { width: 24px; height: 24px; fill: var(--accent-deep); }
+.qbanner b { font-size: 0.95rem; }
+.qbanner p { font-size: 0.8rem; color: var(--ink-soft); margin-top: 0.15rem; }
+.qbanner .btn { margin-left: auto; flex-shrink: 0; }
+
+.doors-table .door-check { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; }
+.doors-table tr.is-queued { opacity: 0.65; }
+.reasons { display: flex; flex-wrap: wrap; gap: 0.3rem; max-width: 220px; }
+.reasons span {
+  font-size: 0.66rem; font-weight: 700; color: var(--ink-soft);
+  background: var(--panel); border: 1.5px solid var(--line); border-radius: 99px; padding: 0.16rem 0.55rem;
+}
+.cell-draft { max-width: 230px; }
+.cell-draft b { display: block; font-size: 0.8rem; }
+.cell-draft small { color: var(--ink-faint); font-size: 0.72rem; line-height: 1.35; display: block; }
+.cell-links { white-space: nowrap; }
+.cell-links a svg { width: 16px; height: 16px; fill: var(--ink-soft); vertical-align: middle; margin-right: 0.5rem; }
+.cell-links a:hover svg { fill: var(--accent-deep); }
+.meta-warn { font-size: 0.76rem; color: var(--ink-faint); font-style: italic; margin-top: 0.8rem; }
+.vh .badge { vertical-align: middle; margin-left: 0.4rem; }
+.vh a { color: var(--accent-deep); font-weight: 700; }
+
+/* ============ auth gate ============ */
+#authgate {
+  position: fixed; inset: 0; z-index: 200; display: grid; place-items: center;
+  background: rgba(27, 42, 56, 0.55); backdrop-filter: blur(6px);
+}
+.authgate__card {
+  width: min(400px, 92vw); background: #fff; border: 2px solid var(--border);
+  border-radius: 26px; box-shadow: 6px 6px 0 var(--border); padding: 2.2rem 2rem; text-align: center;
+}
+.authgate__logo { font-size: 1.5rem; font-weight: 900; letter-spacing: -0.04em; }
+.authgate__logo i { color: var(--accent); font-style: normal; }
+.authgate__card h2 { font-size: 1.3rem; margin-top: 0.8rem; }
+.authgate__card > p { color: var(--ink-soft); font-size: 0.88rem; margin: 0.4rem 0 1.4rem; }
+.authbtn {
+  display: block; width: 100%; margin-bottom: 0.6rem; padding: 0.7rem 1rem;
+  font: 700 0.9rem var(--sans); color: var(--ink); background: #fff;
+  border: 2px solid var(--border); border-radius: 999px; cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.authbtn:hover { transform: translate(-2px, -2px); box-shadow: 3px 3px 0 var(--border); }
+.authbtn--accent { background: var(--accent); color: #fff; }
+.authgate__or { display: flex; align-items: center; gap: 0.8rem; margin: 1rem 0; color: var(--ink-faint); font-size: 0.75rem; font-weight: 700; }
+.authgate__or::before, .authgate__or::after { content: ""; flex: 1; height: 2px; background: var(--line); }
+#auth-email input {
+  width: 100%; margin-bottom: 0.6rem; padding: 0.7rem 1rem;
+  font: 600 0.9rem var(--sans); border: 2px solid var(--border); border-radius: 999px; outline: none;
+}
+.authgate__note { font-size: 0.8rem; font-weight: 700; color: var(--accent-deep); min-height: 1em; margin-top: 0.4rem; }
+.authgate__fine { font-size: 0.68rem; color: var(--ink-faint); margin-top: 1rem; line-height: 1.5; }
+.authgate__fine a { color: var(--accent-deep); }
