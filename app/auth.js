@@ -33,16 +33,28 @@
         <div class="authgate__logo">knock<i>.</i></div>
         <h2>Open some doors.</h2>
         <p>Sign in to build your profile and start knocking.</p>
-        <button class="authbtn" data-provider="google">Continue with Google</button>
-        <button class="authbtn" data-provider="linkedin_oidc">Continue with LinkedIn</button>
+        <button class="authbtn" data-provider="google">
+          <svg class="authbtn__logo" viewBox="0 0 24 24" aria-hidden="true">
+            <path fill="#4285F4" d="M21.6 12.23c0-.78-.07-1.53-.2-2.23H12v4.22h5.38a4.6 4.6 0 0 1-1.99 3.02v2.51h3.22c1.89-1.74 2.99-4.3 2.99-7.52z"/>
+            <path fill="#34A853" d="M12 22c2.7 0 4.96-.89 6.61-2.25l-3.22-2.51c-.9.6-2.04.95-3.39.95-2.6 0-4.8-1.76-5.59-4.12H3.08v2.59A9.99 9.99 0 0 0 12 22z"/>
+            <path fill="#FBBC05" d="M6.41 14.07A6.01 6.01 0 0 1 6.1 12c0-.72.11-1.42.31-2.07V7.34H3.08A9.99 9.99 0 0 0 2 12c0 1.61.39 3.13 1.08 4.66l3.33-2.59z"/>
+            <path fill="#EA4335" d="M12 5.81c1.47 0 2.79.5 3.82 1.5l2.86-2.86C16.95 2.83 14.69 2 12 2a9.99 9.99 0 0 0-8.92 5.34l3.33 2.59C7.2 7.57 9.4 5.81 12 5.81z"/>
+          </svg>
+          Continue with Google
+        </button>
+        <button class="authbtn" data-provider="linkedin_oidc">
+          <svg class="authbtn__logo" viewBox="0 0 24 24" aria-hidden="true">
+            <path fill="#0A66C2" d="M20.45 20.45h-3.56v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.34V8.98h3.42v1.57h.05a3.75 3.75 0 0 1 3.37-1.85c3.61 0 4.27 2.38 4.27 5.47v6.28zM5.32 7.41a2.06 2.06 0 1 1 0-4.12 2.06 2.06 0 0 1 0 4.12zM7.1 20.45H3.53V8.98H7.1v11.47z"/>
+          </svg>
+          Continue with LinkedIn
+        </button>
         <div class="authgate__or"><span>or</span></div>
         <form id="auth-email">
           <input type="email" placeholder="you@school.edu" required />
           <button class="authbtn authbtn--accent" type="submit">Email me a magic link</button>
         </form>
         <p class="authgate__note" id="auth-note"></p>
-        <p class="authgate__fine">By continuing you agree to Knock's <a href="../terms.html">Terms</a> and <a href="../privacy.html">Privacy Policy</a>.<br>
-        LinkedIn sign-in verifies your identity only — Knock never scrapes or messages your LinkedIn.</p>
+        <p class="authgate__fine">By continuing you agree to Knock's <a href="../terms.html">Terms</a> and <a href="../privacy.html">Privacy Policy</a>.</p>
       </div>`;
     document.body.appendChild(el);
 
