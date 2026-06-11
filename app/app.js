@@ -115,8 +115,8 @@ function updateChrome() {
   if (avatar) avatar.innerHTML = state.profilePhoto || user?.avatar
     ? `<img src="${state.profilePhoto || user.avatar}" alt="">`
     : initials;
-  const logout = $("#top-logout");
-  if (logout) logout.hidden = (window.knockAuth?.mode || "dev") === "dev";
+  const menuUser = $("#profile-menu-user");
+  if (menuUser) menuUser.textContent = user?.email || user?.name || PROFILE.name;
 }
 
 /* ============================================================
@@ -237,7 +237,7 @@ async function runSourcing(options = {}) {
     const res = await fetch("/api/sourcing/apollo", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ profile: buildSourcingProfile(), searchMode: state.searchMode, limit: 15 }),
+      body: JSON.stringify({ profile: buildSourcingProfile(), searchMode: state.searchMode, limit: 100 }),
     });
     const data = await res.json();
     clearInterval(ticker);
@@ -1160,7 +1160,21 @@ $("#global-search").addEventListener("input", (e) => {
   else renderPeople();
 });
 
+$("#top-avatar")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const menu = $("#profile-menu");
+  const avatar = $("#top-avatar");
+  if (!menu || !avatar) return;
+  menu.hidden = !menu.hidden;
+  avatar.setAttribute("aria-expanded", String(!menu.hidden));
+});
 $("#top-logout")?.addEventListener("click", () => window.knockAuth?.signOut?.());
+document.addEventListener("click", (e) => {
+  const menu = $("#profile-menu");
+  if (!menu || menu.hidden || e.target.closest(".topbar__profile")) return;
+  menu.hidden = true;
+  $("#top-avatar")?.setAttribute("aria-expanded", "false");
+});
 
 document.addEventListener("knock:auth", () => {
   updateChrome();

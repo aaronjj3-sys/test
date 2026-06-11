@@ -16,7 +16,7 @@
   <div class="shell">
     <!-- ============ SIDEBAR ============ -->
     <aside class="side">
-      <a class="side__logo" href="../index.html">knock<span>.</span></a>
+      <a class="side__logo" href="#dashboard">knock<span>.</span></a>
 
       <nav class="side__nav">
         <a href="#dashboard" data-route="dashboard" class="side__link is-active">
@@ -69,8 +69,13 @@
         </div>
         <div class="topbar__right">
           <span class="topbar__streak" title="Outreach streak"><i></i>6-day streak</span>
-          <button class="topbar__logout" id="top-logout" hidden>Log out</button>
-          <div class="topbar__avatar" id="top-avatar">AJ</div>
+          <div class="topbar__profile">
+            <button class="topbar__avatar" id="top-avatar" aria-label="Account menu" aria-expanded="false">AJ</button>
+            <div class="profile-menu" id="profile-menu" hidden>
+              <div class="profile-menu__user" id="profile-menu-user">Aaron Johnson</div>
+              <button id="top-logout">Log out</button>
+            </div>
+          </div>
         </div>
       </header>
 

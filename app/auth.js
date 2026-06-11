@@ -21,7 +21,14 @@
   window.knockAuth.client = client;
   window.knockAuth.signOut = async () => {
     await client.auth.signOut();
-    location.reload();
+    window.knockAuth.user = null;
+    localStorage.removeItem("knock_doors");
+    localStorage.removeItem("knock_doors_meta");
+    localStorage.removeItem("knock_campaigns");
+    Object.keys(localStorage)
+      .filter((key) => key.startsWith("knock_auto_sourced_"))
+      .forEach((key) => localStorage.removeItem(key));
+    location.href = "../index.html?logout=1";
   };
 
   function gate() {

@@ -101,19 +101,34 @@ input, textarea { font-family: var(--sans); }
 .topbar__search input { border: none; outline: none; background: none; width: 100%; font-size: 0.86rem; color: var(--ink); font-weight: 500; }
 .topbar__right { margin-left: auto; display: flex; align-items: center; gap: 1rem; }
 .topbar__streak { font-size: 0.78rem; color: var(--ink-soft); font-weight: 700; }
+.topbar__profile { position: relative; }
 .topbar__avatar {
   width: 36px; height: 36px; border-radius: 50%; background: var(--accent); color: #fff;
   border: 1.5px solid var(--border); box-shadow: 2px 2px 0 var(--border);
   display: grid; place-items: center; font-size: 0.74rem; font-weight: 800;
   overflow: hidden;
+  padding: 0;
 }
 .topbar__avatar img { width: 100%; height: 100%; object-fit: cover; }
-.topbar__logout {
-  background: var(--card); color: var(--ink); border: 1.5px solid var(--border);
-  border-radius: 999px; box-shadow: 2px 2px 0 var(--border);
-  padding: 0.42rem 0.8rem; font-size: 0.76rem; font-weight: 800;
+.profile-menu {
+  position: absolute; top: 48px; right: 0; z-index: 30; width: 190px;
+  background: var(--card); border: 1.5px solid var(--border); border-radius: 14px;
+  box-shadow: var(--pop); padding: 0.65rem;
 }
-.topbar__logout:hover { transform: translate(-1px, -1px); box-shadow: var(--pop); }
+.profile-menu__user {
+  color: var(--ink-soft); font-size: 0.74rem; font-weight: 800;
+  border-bottom: 1px solid var(--line); padding: 0.35rem 0.45rem 0.6rem;
+  overflow-wrap: anywhere;
+}
+.profile-menu button {
+  width: 100%; margin-top: 0.45rem; text-align: left; background: transparent;
+  border: none; border-radius: 10px; color: var(--ink); font-size: 0.82rem;
+  font-weight: 800; padding: 0.55rem 0.45rem;
+}
+.profile-menu button:hover { background: var(--accent-soft); color: var(--accent-deep); }
+.topbar__avatar:hover {
+  transform: translate(-1px, -1px); box-shadow: var(--pop);
+}
 
 /* ============ buttons & pills ============ */
 .btn {

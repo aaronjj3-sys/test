@@ -97,9 +97,26 @@ async function openLandingAuth(e) {
   });
 }
 
+async function syncLandingSession() {
+  const client = getLandingSupabase();
+  if (!client) return;
+
+  const url = new URL(window.location.href);
+  if (url.searchParams.get("logout") === "1") {
+    await client.auth.signOut();
+    url.searchParams.delete("logout");
+    history.replaceState({}, "", url.pathname + url.search + url.hash);
+    return;
+  }
+
+  const { data: { session } } = await client.auth.getSession();
+  if (session) window.location.href = APP_URL;
+}
+
 document.querySelectorAll('a[href="app/index.html"]').forEach((link) => {
   link.addEventListener("click", openLandingAuth);
 });
+syncLandingSession();
 
 let lenis = null;
 if (!reduceMotion) {
