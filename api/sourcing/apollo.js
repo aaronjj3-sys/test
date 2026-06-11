@@ -13,9 +13,6 @@ export default async function handler(req, res) {
   }
 
   if (!apolloConfigured()) {
-    if (process.env.NODE_ENV === "production") {
-      return res.status(500).json({ error: "Apollo is not configured on the server. Set APOLLO_API_KEY." });
-    }
     return res.status(200).json(mockSourcing(input)); // development fallback, clearly labeled
   }
 

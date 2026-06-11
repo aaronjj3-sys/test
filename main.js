@@ -13,6 +13,94 @@ if (reduceMotion) document.documentElement.classList.add("reduced-motion");
 
 gsap.registerPlugin(ScrollTrigger);
 
+/* ---------------- landing auth gate ---------------- */
+const APP_URL = "app/index.html#dashboard";
+let landingSupabase = null;
+
+function getLandingSupabase() {
+  const cfg = window.KNOCK_CONFIG;
+  if (!cfg?.supabaseUrl || !cfg?.supabaseAnonKey || !window.supabase) return null;
+  if (!landingSupabase) landingSupabase = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
+  return landingSupabase;
+}
+
+async function openLandingAuth(e) {
+  e.preventDefault();
+  const client = getLandingSupabase();
+  if (!client) {
+    window.location.href = APP_URL;
+    return;
+  }
+
+  const { data: { session } } = await client.auth.getSession();
+  if (session) {
+    window.location.href = APP_URL;
+    return;
+  }
+
+  if (document.getElementById("landing-auth")) return;
+  const el = document.createElement("div");
+  el.id = "landing-auth";
+  el.className = "landing-auth";
+  el.innerHTML = `
+    <div class="landing-auth__card">
+      <div class="landing-auth__logo">knock<i>.</i></div>
+      <h2>Open some doors.</h2>
+      <p>Sign in to build your profile and start knocking.</p>
+      <button class="landing-auth__btn" data-provider="google">
+        <svg class="landing-auth__logoicon" viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="#4285F4" d="M21.6 12.23c0-.78-.07-1.53-.2-2.23H12v4.22h5.38a4.6 4.6 0 0 1-1.99 3.02v2.51h3.22c1.89-1.74 2.99-4.3 2.99-7.52z"/>
+          <path fill="#34A853" d="M12 22c2.7 0 4.96-.89 6.61-2.25l-3.22-2.51c-.9.6-2.04.95-3.39.95-2.6 0-4.8-1.76-5.59-4.12H3.08v2.59A9.99 9.99 0 0 0 12 22z"/>
+          <path fill="#FBBC05" d="M6.41 14.07A6.01 6.01 0 0 1 6.1 12c0-.72.11-1.42.31-2.07V7.34H3.08A9.99 9.99 0 0 0 2 12c0 1.61.39 3.13 1.08 4.66l3.33-2.59z"/>
+          <path fill="#EA4335" d="M12 5.81c1.47 0 2.79.5 3.82 1.5l2.86-2.86C16.95 2.83 14.69 2 12 2a9.99 9.99 0 0 0-8.92 5.34l3.33 2.59C7.2 7.57 9.4 5.81 12 5.81z"/>
+        </svg>
+        Continue with Google
+      </button>
+      <button class="landing-auth__btn" data-provider="linkedin_oidc">
+        <svg class="landing-auth__logoicon" viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="#0A66C2" d="M20.45 20.45h-3.56v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.34V8.98h3.42v1.57h.05a3.75 3.75 0 0 1 3.37-1.85c3.61 0 4.27 2.38 4.27 5.47v6.28zM5.32 7.41a2.06 2.06 0 1 1 0-4.12 2.06 2.06 0 0 1 0 4.12zM7.1 20.45H3.53V8.98H7.1v11.47z"/>
+        </svg>
+        Continue with LinkedIn
+      </button>
+      <div class="landing-auth__or"><span>or</span></div>
+      <form id="landing-auth-email">
+        <input type="email" placeholder="you@school.edu" required />
+        <button class="landing-auth__btn landing-auth__btn--accent" type="submit">Email me a magic link</button>
+      </form>
+      <p class="landing-auth__note" id="landing-auth-note"></p>
+      <p class="landing-auth__fine">By continuing you agree to Knock's <a href="terms.html">Terms</a> and <a href="privacy.html">Privacy Policy</a>.</p>
+    </div>`;
+  document.body.append(el);
+
+  el.addEventListener("click", (event) => {
+    if (event.target === el) el.remove();
+  });
+  el.querySelectorAll("[data-provider]").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const { error } = await client.auth.signInWithOAuth({
+        provider: btn.dataset.provider,
+        options: { redirectTo: new URL(APP_URL, window.location.origin).href },
+      });
+      if (error) document.getElementById("landing-auth-note").textContent = error.message;
+    })
+  );
+  el.querySelector("#landing-auth-email").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const email = event.target.querySelector("input").value;
+    const { error } = await client.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: new URL(APP_URL, window.location.origin).href },
+    });
+    document.getElementById("landing-auth-note").textContent = error
+      ? error.message
+      : `Magic link sent to ${email}. Check your inbox.`;
+  });
+}
+
+document.querySelectorAll('a[href="app/index.html"]').forEach((link) => {
+  link.addEventListener("click", openLandingAuth);
+});
+
 let lenis = null;
 if (!reduceMotion) {
   lenis = new Lenis({ lerp: 0.09 });
@@ -92,7 +180,7 @@ if (!reduceMotion) {
     const p = path.getPointAtLength(flight.t * pathLen);
     const p2 = path.getPointAtLength(Math.min(flight.t * pathLen + 2, pathLen));
     const ang = (Math.atan2(p2.y - p.y, p2.x - p.x) * 180) / Math.PI;
-    planeEl.setAttribute("transform", `translate(${p.x - 17}, ${p.y - 15}) rotate(${ang} 17 15)`);
+    planeEl.setAttribute("transform", `translate(${p.x - 20}, ${p.y - 17}) rotate(${ang} 20 17)`);
   };
   placePlane();
   gsap.to(flight, {

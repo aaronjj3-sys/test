@@ -27,6 +27,8 @@ const state = {
   campaigns: JSON.parse(localStorage.getItem("knock_campaigns") || "[]"),
   selectedDoors: new Set(),
   searchMode: localStorage.getItem("knock_search_mode") || "founders",
+  profilePhoto: localStorage.getItem("knock_profile_photo") || "",
+  autoSourcing: false,
 };
 const saveLive = () => {
   localStorage.setItem("knock_doors", JSON.stringify(state.doors));
@@ -107,6 +109,14 @@ function updateChrome() {
   const badge = $("#inbox-badge");
   badge.hidden = unread === 0;
   badge.textContent = unread;
+  const user = window.knockAuth?.user;
+  const initials = ((user?.name || PROFILE.name).match(/\b\w/g) || PROFILE.initials.split("")).slice(0, 2).join("").toUpperCase();
+  const avatar = $("#top-avatar");
+  if (avatar) avatar.innerHTML = state.profilePhoto || user?.avatar
+    ? `<img src="${state.profilePhoto || user.avatar}" alt="">`
+    : initials;
+  const logout = $("#top-logout");
+  if (logout) logout.hidden = (window.knockAuth?.mode || "dev") === "dev";
 }
 
 /* ============================================================
@@ -159,8 +169,15 @@ function buildSourcingProfile() {
 
 function renderDashboard() {
   const queued = state.campaigns.length > 0;
+  if ((!state.doors || state.doors.length === 0) && shouldAutoSource()) return runSourcing({ auto: true });
   if (!state.doors || state.doors.length === 0) return renderGhost();
   return renderDoorsQueue(queued);
+}
+
+function shouldAutoSource() {
+  const auth = window.knockAuth;
+  if (!auth || auth.mode === "dev" || !auth.user?.id || state.autoSourcing) return false;
+  return !localStorage.getItem(`knock_auto_sourced_${auth.user.id}`);
 }
 
 function renderGhost() {
@@ -191,7 +208,8 @@ function renderGhost() {
   $("#see-demo", view).addEventListener("click", (e) => { e.preventDefault(); renderDemoDashboard(); });
 }
 
-async function runSourcing() {
+async function runSourcing(options = {}) {
+  state.autoSourcing = true;
   const STEPS = [
     "Reading your target profile",
     "Searching Apollo for relevant people",
@@ -228,17 +246,20 @@ async function runSourcing() {
     state.doorsMeta = data.meta;
     state.selectedDoors = new Set();
     saveLive();
+    if (window.knockAuth?.user?.id) localStorage.setItem(`knock_auto_sourced_${window.knockAuth.user.id}`, "1");
     toast(`${data.doors.length} doors found${data.doors[0]?.source === "mock" ? " (demo data — Apollo key not configured)" : ""}`);
+    state.autoSourcing = false;
     renderDashboard();
   } catch (err) {
     clearInterval(ticker);
+    state.autoSourcing = false;
     view.innerHTML = `<div class="viewwrap"><div class="ghost">
       <div class="ghost__icon">${I.bell}</div>
       <h2>Sourcing hit a snag</h2>
       <p>${err.message}. If you're running locally, start the dev server with <code>node server.js</code> so the API routes are live.</p>
       <button class="btn btn--accent" id="retry-doors">Try again</button>
     </div></div>`;
-    $("#retry-doors", view).addEventListener("click", renderGhost);
+    $("#retry-doors", view).addEventListener("click", () => options.auto ? runSourcing({ auto: true }) : renderGhost());
   }
 }
 
@@ -263,6 +284,31 @@ function renderDoorsQueue(queued) {
       </div>
       <button class="btn btn--paper btn--sm" id="q-gmail">Connect Gmail</button>
     </div>` : ""}
+    <div class="statgrid">
+      <div class="statcard"><small>Doors found</small><div class="num">${doors.length}</div><span class="delta">${isMock ? "Demo queue ready" : "Live Apollo pull"}</span></div>
+      <div class="statcard"><small>Average match</small><div class="num">${Math.round(doors.reduce((sum, d) => sum + (d.matchScore || 0), 0) / doors.length)}%</div><span class="delta">scored for you</span></div>
+      <div class="statcard"><small>Drafts ready</small><div class="num">${doors.filter((d) => d.draft).length}</div><span class="delta">review before sending</span></div>
+      <div class="statcard"><small>Knocks left</small><div class="num">${state.knocks}</div><span class="delta">free plan</span></div>
+    </div>
+    <div class="rowhead">
+      <h2>Top doors to knock</h2>
+      <span class="rowhead__hint">ranked by match score</span>
+    </div>
+    <div class="matches">
+      ${doors.slice(0, 5).map((d, i) => {
+        const colors = ["lavender", "mint", "blush", "butter", "lavender"];
+        return `<article class="match-card match-card--${colors[i]}">
+          <div class="match-card__top"><span class="match-card__meta">${d.companyName || "New door"}</span>${ring(d.matchScore || 0, 46)}</div>
+          <h3>${d.name}</h3>
+          <div class="co">${d.title || ""}</div>
+          <div class="match-card__tags">${(d.matchReasons || []).slice(0, 3).map((r) => `<span>${r}</span>`).join("")}</div>
+          <div class="match-card__foot">
+            <span class="who">${d.companyName ? logo({ company: d.companyName, domain: d.companyDomain || "" }, 26) : ""}${d.location || "Apollo"}</span>
+            <button class="btn btn--paper btn--sm act-review" data-id="${d.id}">Review knock</button>
+          </div>
+        </article>`;
+      }).join("")}
+    </div>
     <div class="rowhead">
       <h2>Your launch queue</h2>
       <span class="rowhead__hint">${meta.searchedPeople || doors.length} people searched · ${meta.creditsLikelyUsed ? "credits used" : "no Apollo credits used"}</span>
@@ -672,15 +718,23 @@ function renderTracker() {
    PROFILE
    ============================================================ */
 function renderProfile() {
+  const user = window.knockAuth?.user || {};
+  const profileName = user.name || PROFILE.name;
+  const profileEmail = user.email || PROFILE.email;
   view.innerHTML = `<div class="viewwrap">
     <div class="vh"><h1>This is who Scout <em>sounds like.</em></h1>
     <p>Everything below was pulled from your resume + questionnaire. Edit anything; every future draft updates instantly.</p></div>
     <div class="profile-grid">
       <div>
         <div class="pcard idcard">
-          <span class="avatar">${PROFILE.initials}</span>
-          <h2>${PROFILE.name}</h2>
-          <div class="sub">${PROFILE.school}<br>${PROFILE.degree} · Class of ${PROFILE.gradYear}</div>
+          <span class="avatar">${state.profilePhoto ? `<img src="${state.profilePhoto}" alt="">` : PROFILE.initials}</span>
+          <h2>${profileName}</h2>
+          <div class="sub">${profileEmail}<br>${PROFILE.school}<br>${PROFILE.degree} · Class of ${PROFILE.gradYear}</div>
+          <div class="photo-actions">
+            <label class="btn btn--paper btn--sm" for="profile-photo">Add profile picture</label>
+            ${state.profilePhoto ? '<button class="btn btn--paper btn--sm" id="remove-photo">Remove</button>' : ""}
+            <input id="profile-photo" type="file" accept="image/*">
+          </div>
           <div class="traits">${PROFILE.traits.map((t) => `<span class="trait">${t}</span>`).join("")}</div>
           <div class="voicebox">
             <b>Writing voice</b>: tone <b>${PROFILE.voice.tone}</b> · length <b>${PROFILE.voice.length}</b> · sign-off <b>${PROFILE.voice.signoff}</b>
@@ -723,6 +777,26 @@ function renderProfile() {
       PROFILE.story = el.textContent.replace(/[“”]/g, "");
       toast("Saved. Scout's drafts now use the new story");
     }, { once: true });
+  });
+  $("#profile-photo", view)?.addEventListener("change", (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      state.profilePhoto = reader.result;
+      localStorage.setItem("knock_profile_photo", state.profilePhoto);
+      toast("Profile picture saved");
+      renderProfile();
+      updateChrome();
+    };
+    reader.readAsDataURL(file);
+  });
+  $("#remove-photo", view)?.addEventListener("click", () => {
+    state.profilePhoto = "";
+    localStorage.removeItem("knock_profile_photo");
+    toast("Profile picture removed");
+    renderProfile();
+    updateChrome();
   });
   $("#re-upload", view)?.addEventListener("click", () =>
     toast("Drop a new PDF anytime. Parsing takes ~20 seconds"));
@@ -1073,7 +1147,7 @@ function openOnboarding(step = 1) {
       localStorage.setItem("knock_onboarded", "1");
       localStorage.removeItem("knock_ob_draft");
       closeModal();
-      toast(`Profile built${facts.wins.length ? ` — ${facts.wins.length} quantified win${facts.wins.length === 1 ? "" : "s"} extracted` : ""}. Hit “Find doors” to build your queue`);
+      toast(`Profile built${facts.wins.length ? `, ${facts.wins.length} quantified win${facts.wins.length === 1 ? "" : "s"} extracted` : ""}. Building your first queue now`);
       navigate();
     });
   }
@@ -1084,6 +1158,13 @@ $("#global-search").addEventListener("input", (e) => {
   state.filters.q = e.target.value.toLowerCase();
   if (location.hash !== "#people") location.hash = "people";
   else renderPeople();
+});
+
+$("#top-logout")?.addEventListener("click", () => window.knockAuth?.signOut?.());
+
+document.addEventListener("knock:auth", () => {
+  updateChrome();
+  if ((location.hash.replace("#", "") || "dashboard") === "dashboard") renderDashboard();
 });
 
 /* ---------------- boot ---------------- */

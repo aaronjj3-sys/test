@@ -60,6 +60,39 @@ img { display: block; max-width: 100%; }
 .btn--sm:hover { box-shadow: 0 5px 0 var(--border); }
 .btn--full { width: 100%; }
 
+/* ============ landing auth gate ============ */
+.landing-auth {
+  position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
+  background: rgba(27, 42, 56, 0.55); backdrop-filter: blur(6px);
+}
+.landing-auth__card {
+  width: min(400px, 92vw); background: #fff; border: 2px solid var(--border);
+  border-radius: 26px; box-shadow: 6px 6px 0 var(--border); padding: 2.2rem 2rem; text-align: center;
+}
+.landing-auth__logo { font-size: 1.5rem; font-weight: 900; letter-spacing: -0.04em; }
+.landing-auth__logo i { color: var(--blue); font-style: normal; }
+.landing-auth__card h2 { font-size: 1.3rem; margin-top: 0.8rem; }
+.landing-auth__card > p { color: var(--ink-soft); font-size: 0.88rem; margin: 0.4rem 0 1.4rem; }
+.landing-auth__btn {
+  display: flex; align-items: center; justify-content: center; gap: 0.55rem;
+  width: 100%; margin-bottom: 0.6rem; padding: 0.7rem 1rem;
+  font: 700 0.9rem var(--sans); color: var(--ink); background: #fff;
+  border: 2px solid var(--border); border-radius: 999px; cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.landing-auth__btn:hover { transform: translate(-2px, -2px); box-shadow: 3px 3px 0 var(--border); }
+.landing-auth__btn--accent { background: var(--blue); color: #fff; }
+.landing-auth__logoicon { width: 18px; height: 18px; flex: none; }
+.landing-auth__or { display: flex; align-items: center; gap: 0.8rem; margin: 1rem 0; color: var(--ink-faint); font-size: 0.75rem; font-weight: 700; }
+.landing-auth__or::before, .landing-auth__or::after { content: ""; flex: 1; height: 2px; background: var(--line); }
+.landing-auth input {
+  width: 100%; margin-bottom: 0.6rem; padding: 0.7rem 1rem;
+  font: 600 0.9rem var(--sans); border: 2px solid var(--border); border-radius: 999px; outline: none;
+}
+.landing-auth__note { font-size: 0.8rem; font-weight: 700; color: var(--blue-deep); min-height: 1em; margin-top: 0.4rem; }
+.landing-auth__fine { font-size: 0.68rem; color: var(--ink-faint); margin-top: 1rem; line-height: 1.5; }
+.landing-auth__fine a { color: var(--blue-deep); }
+
 /* ============ pill nav (condenses on scroll) ============ */
 .nav {
   position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 50;
