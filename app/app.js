@@ -19,8 +19,19 @@ const state = {
   openThread: null,
   trackerTab: "all",
   autonomy: { review: true, followups: true, weekends: false },
-  connections: { gmail: true, gcal: true, outlook: false, linkedin: false },
+  connections: JSON.parse(localStorage.getItem("knock_connections") || '{"gmail":false,"gcal":false,"outlook":false,"linkedin":false}'),
   stats: { sent: 31, openRate: 71, replies: 9, meetings: 2 },
+  /* live sourcing state (persisted locally until Supabase is wired) */
+  doors: JSON.parse(localStorage.getItem("knock_doors") || "null"),
+  doorsMeta: JSON.parse(localStorage.getItem("knock_doors_meta") || "null"),
+  campaigns: JSON.parse(localStorage.getItem("knock_campaigns") || "[]"),
+  selectedDoors: new Set(),
+  searchMode: localStorage.getItem("knock_search_mode") || "founders",
+};
+const saveLive = () => {
+  localStorage.setItem("knock_doors", JSON.stringify(state.doors));
+  localStorage.setItem("knock_doors_meta", JSON.stringify(state.doorsMeta));
+  localStorage.setItem("knock_campaigns", JSON.stringify(state.campaigns));
 };
 const contact = (id) => CONTACTS.find((c) => c.id === id);
 const saveKnocks = () => localStorage.setItem("knock_left", state.knocks);
@@ -124,15 +135,231 @@ function greeting() {
   return "Evening";
 }
 
+/* ---- live dashboard: ghost → sourcing → doors queue → campaign queued ---- */
+const SEARCH_MODES_UI = [
+  ["founders", "Founders"], ["hiring_managers", "Hiring managers"],
+  ["investors", "Investors"], ["operators", "Operators"],
+];
+
+function buildSourcingProfile() {
+  const saved = JSON.parse(localStorage.getItem("knock_profile") || "null");
+  if (saved) return saved;
+  /* fallback before onboarding completes */
+  return {
+    story: PROFILE.story,
+    target: "YC founders, startup operators, investors, hiring managers",
+    school: PROFILE.school || "UC Irvine",
+    fullName: PROFILE.name,
+    goals: ["founder mentorship", "startup roles", "internship opportunities"],
+    locations: ["San Francisco", "New York", "Los Angeles", "Remote"],
+    industries: ["SaaS", "Venture Capital", "Private Equity", "Startups"],
+    quantifiedWins: ["built a $400K wholesale/ecommerce business in high school"],
+  };
+}
+
 function renderDashboard() {
+  const queued = state.campaigns.length > 0;
+  if (!state.doors || state.doors.length === 0) return renderGhost();
+  return renderDoorsQueue(queued);
+}
+
+function renderGhost() {
+  view.innerHTML = `<div class="viewwrap">
+    <div class="vh">
+      <h1>${greeting()}, ${PROFILE.name.split(" ")[0]}.</h1>
+      <p>Your command station is ready. Run your first sourcing pass to fill it.</p>
+    </div>
+    <div class="ghost">
+      <div class="ghost__icon">${I.search}</div>
+      <h2>No doors found yet</h2>
+      <p>Run your first sourcing pass and Knock will build a high-signal queue of real people matched to your profile.</p>
+      <div class="ghost__modes">
+        ${SEARCH_MODES_UI.map(([id, label]) =>
+          `<button class="pill ${state.searchMode === id ? "is-on" : ""}" data-mode="${id}">${label}</button>`).join("")}
+      </div>
+      <button class="btn btn--accent" id="find-doors">Find doors</button>
+      <p class="ghost__fine">Search is free — Knock only spends enrichment credits when you approve a knock.
+        <a href="#" id="see-demo">Peek at the demo dashboard</a></p>
+    </div>
+  </div>`;
+  $$(".ghost__modes .pill", view).forEach((p) => p.addEventListener("click", () => {
+    state.searchMode = p.dataset.mode;
+    localStorage.setItem("knock_search_mode", state.searchMode);
+    $$(".ghost__modes .pill", view).forEach((x) => x.classList.toggle("is-on", x === p));
+  }));
+  $("#find-doors", view).addEventListener("click", runSourcing);
+  $("#see-demo", view).addEventListener("click", (e) => { e.preventDefault(); renderDemoDashboard(); });
+}
+
+async function runSourcing() {
+  const STEPS = [
+    "Reading your target profile",
+    "Searching Apollo for relevant people",
+    "Scoring title, company, and seniority fit",
+    "Drafting personalized hooks",
+    "Building your launch queue",
+  ];
+  view.innerHTML = `<div class="viewwrap"><div class="ghost">
+    <div class="ghost__icon ghost__icon--spin">${I.spark}</div>
+    <h2>Scout is sourcing…</h2>
+    <ul class="srcsteps">${STEPS.map((s, i) => `<li data-i="${i}">${s}</li>`).join("")}</ul>
+  </div></div>`;
+  const items = $$(".srcsteps li", view);
+  let step = 0;
+  items[0].classList.add("is-on");
+  const ticker = setInterval(() => {
+    if (step < STEPS.length - 1) {
+      items[step].classList.add("is-done");
+      step++;
+      items[step].classList.add("is-on");
+    }
+  }, 850);
+
+  try {
+    const res = await fetch("/api/sourcing/apollo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile: buildSourcingProfile(), searchMode: state.searchMode, limit: 15 }),
+    });
+    const data = await res.json();
+    clearInterval(ticker);
+    if (!res.ok) throw new Error(data.error || "Sourcing failed");
+    state.doors = data.doors;
+    state.doorsMeta = data.meta;
+    state.selectedDoors = new Set();
+    saveLive();
+    toast(`${data.doors.length} doors found${data.doors[0]?.source === "mock" ? " (demo data — Apollo key not configured)" : ""}`);
+    renderDashboard();
+  } catch (err) {
+    clearInterval(ticker);
+    view.innerHTML = `<div class="viewwrap"><div class="ghost">
+      <div class="ghost__icon">${I.bell}</div>
+      <h2>Sourcing hit a snag</h2>
+      <p>${err.message}. If you're running locally, start the dev server with <code>node server.js</code> so the API routes are live.</p>
+      <button class="btn btn--accent" id="retry-doors">Try again</button>
+    </div></div>`;
+    $("#retry-doors", view).addEventListener("click", renderGhost);
+  }
+}
+
+function renderDoorsQueue(queued) {
+  const doors = state.doors;
+  const meta = state.doorsMeta || {};
+  const isMock = doors[0]?.source === "mock";
+  const campaign = state.campaigns[state.campaigns.length - 1];
+  const queuedIds = new Set(state.campaigns.flatMap((c) => c.selectedDoorIds));
+
+  view.innerHTML = `<div class="viewwrap">
+    <div class="vh">
+      <h1>${doors.length} doors found ${isMock ? '<span class="badge badge--hiring">demo data</span>' : ""}</h1>
+      <p>Scored against your profile. Select the people you want, review the drafts, then launch.</p>
+    </div>
+    ${queued ? `
+    <div class="qbanner">
+      <div>${I.plane}</div>
+      <div>
+        <b>Campaign queued · ${campaign.selectedDoorIds.length} knock${campaign.selectedDoorIds.length === 1 ? "" : "s"}</b>
+        <p>Gmail sending is not connected yet — nothing has been sent. Connect Gmail to send from your own inbox.</p>
+      </div>
+      <button class="btn btn--paper btn--sm" id="q-gmail">Connect Gmail</button>
+    </div>` : ""}
+    <div class="rowhead">
+      <h2>Your launch queue</h2>
+      <span class="rowhead__hint">${meta.searchedPeople || doors.length} people searched · ${meta.creditsLikelyUsed ? "credits used" : "no Apollo credits used"}</span>
+      <div class="rowhead__actions">
+        <button class="btn btn--paper btn--sm" id="resource">Find new doors</button>
+        <button class="btn btn--sm" id="launch" disabled>Approve &amp; Launch Campaign</button>
+      </div>
+    </div>
+    <div class="tablewrap"><table class="doors-table">
+      <thead><tr><th></th><th>Person</th><th>Company</th><th>Match</th><th>Why</th><th>Draft</th><th></th></tr></thead>
+      <tbody>
+        ${doors.map((d) => `
+          <tr data-id="${d.id}" class="${queuedIds.has(d.id) ? "is-queued" : ""}">
+            <td>${queuedIds.has(d.id)
+              ? '<span class="st st--sent"><i></i>queued</span>'
+              : `<input type="checkbox" class="door-check" data-id="${d.id}" ${state.selectedDoors.has(d.id) ? "checked" : ""}>`}</td>
+            <td><div class="cell-who"><div><strong>${d.name}</strong><small>${d.title || ""}${d.location ? " · " + d.location : ""}</small></div></div></td>
+            <td>${d.companyName ? `<div class="cell-co">${logo({ company: d.companyName, domain: d.companyDomain || "" }, 24)}<span>${d.companyName}</span></div>` : "—"}</td>
+            <td>${ring(d.matchScore, 40)}</td>
+            <td><div class="reasons">${(d.matchReasons || []).slice(0, 3).map((r) => `<span>${r}</span>`).join("")}</div></td>
+            <td class="cell-draft"><b>${d.draft?.subject || ""}</b><small>${(d.draft?.preview || "").slice(0, 90)}…</small></td>
+            <td class="cell-links">${d.linkedinUrl ? `<a href="${d.linkedinUrl}" target="_blank" rel="noopener" title="LinkedIn">${I.linkedin}</a>` : ""}
+                <button class="btn btn--paper btn--sm act-review" data-id="${d.id}">Review knock</button></td>
+          </tr>`).join("")}
+      </tbody>
+    </table></div>
+    ${(meta.warnings || []).map((w) => `<p class="meta-warn">${w}</p>`).join("")}
+  </div>`;
+
+  const launch = $("#launch", view);
+  const syncLaunch = () => {
+    launch.disabled = state.selectedDoors.size === 0;
+    launch.textContent = state.selectedDoors.size
+      ? `Approve & Launch (${state.selectedDoors.size})` : "Approve & Launch Campaign";
+  };
+  syncLaunch();
+  $$(".door-check", view).forEach((cb) => cb.addEventListener("change", () => {
+    cb.checked ? state.selectedDoors.add(cb.dataset.id) : state.selectedDoors.delete(cb.dataset.id);
+    syncLaunch();
+  }));
+  $$(".act-review", view).forEach((b) => b.addEventListener("click", () => {
+    const d = doors.find((x) => x.id === b.dataset.id);
+    openDoorDraft(d);
+  }));
+  launch.addEventListener("click", launchCampaign);
+  $("#resource", view).addEventListener("click", runSourcing);
+  $("#q-gmail", view)?.addEventListener("click", () =>
+    toast("Gmail OAuth is the next build step — campaigns stay safely queued until then"));
+}
+
+function openDoorDraft(d) {
+  openModal(`
+    <h2 style="font-size:1.2rem">${d.draft?.subject || "Draft"}</h2>
+    <p class="sub">To ${d.name} · ${d.title || ""} at ${d.companyName || ""}</p>
+    <div class="pcard" style="white-space:pre-wrap;font-size:.88rem;line-height:1.55">${d.draft?.body || d.draft?.preview || ""}</div>
+    <div class="modal__actions">
+      <button class="btn btn--paper" id="dd-close">Close</button>
+      <button class="btn btn--accent" id="dd-select">${state.selectedDoors.has(d.id) ? "Selected ✓" : "Select for campaign"}</button>
+    </div>`);
+  $("#dd-close").addEventListener("click", closeModal);
+  $("#dd-select").addEventListener("click", () => {
+    state.selectedDoors.add(d.id);
+    closeModal();
+    renderDashboard();
+  });
+}
+
+async function launchCampaign() {
+  const selected = state.doors.filter((d) => state.selectedDoors.has(d.id));
+  if (!selected.length) return;
+  try {
+    const res = await fetch("/api/campaigns/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ doors: selected }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Could not queue campaign");
+    state.campaigns.push(data.campaign);
+    state.selectedDoors = new Set();
+    saveLive();
+    toast("Campaign queued — Gmail sending is not connected yet, nothing was sent");
+    renderDashboard();
+  } catch (err) {
+    toast(`Launch failed: ${err.message}`);
+  }
+}
+
+function renderDemoDashboard() {
   const inPipeline = new Set(state.outreach.map((o) => o.contactId));
   const matches = CONTACTS.filter((c) => !inPipeline.has(c.id) && !state.passed.has(c.id)).slice(0, 5);
   const warm = state.outreach.filter((o) => o.stage === "replied" || o.stage === "meeting").length;
 
   view.innerHTML = `<div class="viewwrap">
     <div class="vh">
-      <h1>${greeting()}, ${PROFILE.name.split(" ")[0]}. <em>${warm} warm thread${warm === 1 ? "" : "s"}</em> waiting.</h1>
-      <p>Scout sourced ${matches.length} new doors overnight from the YC directory, alumni network, and live hiring signals.</p>
+      <h1>${greeting()}, ${PROFILE.name.split(" ")[0]}. <em>${warm} warm thread${warm === 1 ? "" : "s"}</em> waiting. <span class="badge badge--hiring">demo data</span></h1>
+      <p>Scout sourced ${matches.length} new doors overnight from the YC directory, alumni network, and live hiring signals. <a href="#" id="back-live">Back to your live dashboard</a></p>
     </div>
 
     <div class="statgrid">
@@ -197,8 +424,9 @@ function renderDashboard() {
       state.passed.add(card.dataset.id);
       card.style.cssText += "transition:.3s;opacity:0;transform:translateX(-16px) rotate(-2deg)";
       toast("Passed. Scout recalibrates your matches");
-      setTimeout(renderDashboard, 320);
+      setTimeout(renderDemoDashboard, 320);
     }));
+  $("#back-live", view)?.addEventListener("click", (e) => { e.preventDefault(); renderDashboard(); });
   $("#knock-all", view)?.addEventListener("click", () => {
     if (!matches.length) return;
     matches.slice(1).forEach((c) => state.outreach.unshift({ contactId: c.id, stage: "drafted", lastTouch: "just now", opens: 0, note: "Draft ready for review" }));
@@ -292,19 +520,22 @@ function openConnections() {
           <span class="ico">${I[c.icn]}</span>
           <div><strong>${c.name}</strong><small>${c.sub}</small></div>
           ${state.connections[c.id]
-            ? '<span class="connected end">Connected</span>'
+            ? `<button class="btn btn--paper btn--sm end act-disconnect">Disconnect</button>`
             : `<button class="btn btn--sm end act-connect">Connect</button>`}
         </div>`).join("")}
     </div>
-    <p class="connlist__fine">More channels (iMessage, X, Discord) are on the roadmap.</p>
+    <p class="connlist__fine">Real OAuth (Gmail send, Calendar) is the next build step — these toggles track intent until then. More channels (iMessage, X, Discord) are on the roadmap.</p>
     <div class="modal__actions"><button class="btn btn--ghost" id="m-close">Done</button></div>`);
+  const setConn = (id, val) => {
+    state.connections[id] = val;
+    localStorage.setItem("knock_connections", JSON.stringify(state.connections));
+    toast(`${CONNECTIONS.find((c) => c.id === id).name} ${val ? "connected" : "disconnected"}`);
+    openConnections();
+  };
   $$(".act-connect", modal).forEach((b) =>
-    b.addEventListener("click", (e) => {
-      const id = e.target.closest(".connrow").dataset.id;
-      state.connections[id] = true;
-      toast(`${CONNECTIONS.find((c) => c.id === id).name} connected`);
-      openConnections();
-    }));
+    b.addEventListener("click", (e) => setConn(e.target.closest(".connrow").dataset.id, true)));
+  $$(".act-disconnect", modal).forEach((b) =>
+    b.addEventListener("click", (e) => setConn(e.target.closest(".connrow").dataset.id, false)));
   $("#m-close", modal).addEventListener("click", closeModal);
 }
 
@@ -501,9 +732,17 @@ function renderProfile() {
    SETTINGS
    ============================================================ */
 function renderSettings() {
+  const user = window.knockAuth?.user || { email: "dev@knock.local", name: "Dev mode" };
+  const isDev = (window.knockAuth?.mode || "dev") === "dev";
   view.innerHTML = `<div class="viewwrap">
     <div class="vh"><h1>Settings</h1><p>How Scout behaves in other people's inboxes.</p></div>
     <div class="settings-grid">
+      <div class="pcard">
+        <h3>Account</h3>
+        <div class="setrow"><span class="ico">${I.story}</span><div><strong>${user.name || user.email}</strong><small>${user.email}${isDev ? " · dev mode (configure Supabase for real auth)" : ""}</small></div>
+          ${isDev ? "" : '<button class="btn btn--paper btn--sm end" id="set-logout">Log out</button>'}</div>
+        <div class="setrow"><span class="ico">${I.plug}</span><div><strong>Apollo sourcing</strong><small id="apollo-status">checking…</small></div></div>
+      </div>
       <div class="pcard">
         <h3>Agent autonomy</h3>
         <div class="setrow"><span class="ico">${I.search}</span><div><strong>Review before sending</strong><small>Every draft waits for your approval</small></div>
@@ -515,10 +754,10 @@ function renderSettings() {
       </div>
       <div class="pcard">
         <h3>Connections</h3>
-        <div class="setrow"><span class="ico">${I.mail}</span><div><strong>Gmail</strong><small>aaron@uci.edu · sends from your real address</small></div>
-          <span class="connected end">Connected</span></div>
-        <div class="setrow"><span class="ico">${I.cal}</span><div><strong>Google Calendar</strong><small>Auto-offers your free slots when they say yes</small></div>
-          <span class="connected end">Connected</span></div>
+        <div class="setrow"><span class="ico">${I.mail}</span><div><strong>Gmail</strong><small>${state.connections.gmail ? "Connected · sends from your real address" : "Not connected — campaigns stay queued until you connect"}</small></div>
+          ${state.connections.gmail ? '<span class="connected end">Connected</span>' : '<button class="btn btn--sm end" id="set-gmail">Connect</button>'}</div>
+        <div class="setrow"><span class="ico">${I.cal}</span><div><strong>Google Calendar</strong><small>${state.connections.gcal ? "Connected · auto-offers your free slots" : "Not connected"}</small></div>
+          ${state.connections.gcal ? '<span class="connected end">Connected</span>' : '<button class="btn btn--paper btn--sm end" id="set-gcal">Connect</button>'}</div>
         <div class="setrow"><span class="ico">${I.plug}</span><div><strong>All channels</strong><small>Outlook, LinkedIn and more</small></div>
           <button class="btn btn--paper btn--sm end" id="set-connections">Manage</button></div>
       </div>
@@ -542,6 +781,20 @@ function renderSettings() {
   $("#set-upgrade", view)?.addEventListener("click", openUpgrade);
   $("#set-feedback", view)?.addEventListener("click", openFeedback);
   $("#set-connections", view)?.addEventListener("click", openConnections);
+  $("#set-logout", view)?.addEventListener("click", () => window.knockAuth.signOut());
+  $("#set-gmail", view)?.addEventListener("click", () =>
+    toast("Gmail OAuth (send scopes) is the next build step — separate from Google login"));
+  $("#set-gcal", view)?.addEventListener("click", () =>
+    toast("Google Calendar connect is coming with the Gmail integration"));
+  fetch("/api/test-apollo").then((r) => r.json()).then((d) => {
+    const el = $("#apollo-status", view);
+    if (el) el.textContent = d.apolloConfigured
+      ? "Server configured — live sourcing on"
+      : "Mock mode — set APOLLO_API_KEY in .env.local for live sourcing";
+  }).catch(() => {
+    const el = $("#apollo-status", view);
+    if (el) el.textContent = "API offline — run `node server.js` for live sourcing";
+  });
 }
 
 /* ============================================================
@@ -723,47 +976,105 @@ function openUpgrade() {
 }
 $("#upgrade-btn").addEventListener("click", openUpgrade);
 
-/* ---- onboarding ---- */
+/* ---- onboarding: builds a real profile that powers sourcing ---- */
+const OB = JSON.parse(localStorage.getItem("knock_ob_draft") || "{}");
+
+/* deterministic extraction — Claude parsing replaces this later */
+function extractProfileFacts(text) {
+  const wins = [];
+  const winRe = /[^.\n]*(?:\$\s?\d[\d,.]*\s?[KkMmBb]?|\d{1,3}\s?%|\b\d[\d,]*\+?\s+(?:users|customers|members|sales|clients|downloads|followers))[^.\n]*/g;
+  let m;
+  while ((m = winRe.exec(text)) && wins.length < 5) {
+    const w = m[0].trim();
+    if (w.length > 10 && w.length < 160) wins.push(w);
+  }
+  const schoolMatch = text.match(/\b(UC\s?Irvine|UCI|UCLA|USC|Berkeley|Stanford|[A-Z][a-z]+ University)\b/);
+  return { wins, school: schoolMatch ? schoolMatch[0].replace(/^UCI$/, "UC Irvine") : null };
+}
+
+const PEOPLE_TO_MODE = {
+  Founders: "founders", "Co-founders": "founders",
+  "Hiring managers": "hiring_managers", Recruiters: "hiring_managers",
+  Partners: "investors", Principals: "investors", Associates: "investors",
+  Operators: "operators", "Chiefs of staff": "operators",
+};
+
 function openOnboarding(step = 1) {
   const bars = (n) => `<div class="obsteps">${[1, 2, 3].map((i) => `<i class="${i <= n ? "on" : ""}"></i>`).join("")}</div>`;
+  const chips = (list, selected, cls = "") =>
+    `<div class="chips-select ${cls}">${list.map((t) => `<button class="pill ${selected.includes(t) ? "is-on" : ""}" data-v="${t}">${t}</button>`).join("")}</div>`;
+  const readChips = (cls) => $$(`.${cls} .pill.is-on`, modal).map((p) => p.dataset.v);
+
   if (step === 1) {
     openModal(`${bars(1)}
-      <h2>First. Who are you?</h2>
-      <p class="sub">Drop a resume, or just talk. Scout reads everything once and never asks again.</p>
-      <div class="dropzone" id="ob-drop">${icon("doc")} Drop your resume here<br><small>PDF, DOCX, or skip it</small></div>
-      <label>Or describe yourself in a sentence or two</label>
-      <textarea rows="3" placeholder="e.g. Built a $400K e-commerce business in high school. Strategy student. I outwork everyone.">${PROFILE.story}</textarea>
+      <h2>Drop your resume so Knock can find your strongest hooks.</h2>
+      <p class="sub">Paste your resume or LinkedIn summary — Scout pulls the wins that make people reply.</p>
+      <textarea id="ob-resume" rows="6" placeholder="Paste your resume or LinkedIn summary here…">${OB.resumeText || ""}</textarea>
+      <label>Your story in a sentence or two</label>
+      <textarea id="ob-story" rows="2" placeholder="e.g. Built a $400K e-commerce business in high school. Strategy student. I outwork everyone.">${OB.story || PROFILE.story}</textarea>
       <div class="modal__actions"><button class="btn" id="ob-next">Continue →</button></div>`);
-    $("#ob-drop").addEventListener("click", function () { this.classList.add("is-filled"); this.innerHTML = "Aaron_Johnson_Resume.pdf<br><small>parsing… 17 facts extracted</small>"; });
-    $("#ob-next").addEventListener("click", () => openOnboarding(2));
+    $("#ob-next").addEventListener("click", () => {
+      OB.resumeText = $("#ob-resume").value;
+      OB.story = $("#ob-story").value || PROFILE.story;
+      localStorage.setItem("knock_ob_draft", JSON.stringify(OB));
+      openOnboarding(2);
+    });
   } else if (step === 2) {
     openModal(`${bars(2)}
-      <h2>What are you <em style="color:var(--accent-deep)">actually</em> like?</h2>
-      <p class="sub">Pick what's true. This is how Scout sounds like you, not like AI.</p>
-      <div class="chips-select">
-        ${["Allergic to average", "Will do whatever it takes", "Ships fast", "First-gen hustle", "Quietly relentless", "Big swing energy", "Detail obsessed", "Cold-email native"].map((t, i) => `<button class="pill ${i < 3 ? "is-on" : ""}">${t}</button>`).join("")}
-      </div>
-      <label>What do you want doors opened to?</label>
-      <div class="chips-select">
-        ${["Jobs & internships", "Coffee chats", "Case comp sponsors", "Anything. Surprise me"].map((t, i) => `<button class="pill ${i === 0 ? "is-on" : ""}">${t}</button>`).join("")}
-      </div>
+      <h2>Tell Knock what kind of doors you want opened.</h2>
+      <p class="sub">Pick your target path and the people you want to reach.</p>
+      <label>Target path</label>
+      ${chips(["Private Equity", "Venture Capital", "Startups", "Consulting", "Product", "Operations", "Founder network", "Recruiting / internships"], OB.industries || ["Startups"], "ob-ind")}
+      <label>People to reach</label>
+      ${chips(["Founders", "Co-founders", "Hiring managers", "Recruiters", "Partners", "Principals", "Operators", "Chiefs of staff"], OB.targetRoles || ["Founders"], "ob-roles")}
       <div class="modal__actions"><button class="btn" id="ob-next">Continue →</button></div>`);
     $$(".pill", modal).forEach((p) => p.addEventListener("click", () => p.classList.toggle("is-on")));
-    $("#ob-next").addEventListener("click", () => openOnboarding(3));
+    $("#ob-next").addEventListener("click", () => {
+      OB.industries = readChips("ob-ind");
+      OB.targetRoles = readChips("ob-roles");
+      localStorage.setItem("knock_ob_draft", JSON.stringify(OB));
+      openOnboarding(3);
+    });
   } else {
     openModal(`${bars(3)}
-      <h2>Scout is calibrated.</h2>
-      <p class="sub">12 doors found overnight: 3 YC founders, 2 alumni, 4 live hiring managers, 2 PE/VC contacts, 1 case-comp sponsor. Ranked by who will actually reply to <b>you</b>.</p>
-      <div class="pcard" style="font-size:.84rem;color:var(--ink-soft)">
-        Tone locked: <b style="color:var(--ink)">direct &amp; warm, under 120 words</b><br>
-        Hook strategy: <b style="color:var(--ink)">lead with the $400K founder story</b><br>
-        Send window: <b style="color:var(--ink)">their reading hours, never weekends</b>
-      </div>
-      <div class="modal__actions"><button class="btn btn--accent" id="ob-done">Show me my doors →</button></div>`);
+      <h2>Almost there.</h2>
+      <p class="sub">Where, and how you want to sound. We'll build your first queue automatically.</p>
+      <label>Location preference</label>
+      ${chips(["San Francisco", "New York", "Los Angeles", "Boston", "Chicago", "Remote", "Any"], OB.locations || ["San Francisco", "Remote"], "ob-loc")}
+      <label>Tone</label>
+      ${chips(["Casual", "Sharp", "Polished", "Founder-like"], OB.tone ? [OB.tone] : ["Sharp"], "ob-tone")}
+      <div class="modal__actions"><button class="btn btn--accent" id="ob-done">Build my profile →</button></div>`);
+    $$(".ob-loc .pill", modal).forEach((p) => p.addEventListener("click", () => p.classList.toggle("is-on")));
+    $$(".ob-tone .pill", modal).forEach((p) => p.addEventListener("click", () => {
+      $$(".ob-tone .pill", modal).forEach((x) => x.classList.toggle("is-on", x === p));
+    }));
     $("#ob-done").addEventListener("click", () => {
+      OB.locations = readChips("ob-loc");
+      OB.tone = readChips("ob-tone")[0] || "Sharp";
+      const facts = extractProfileFacts(`${OB.resumeText || ""} ${OB.story || ""}`);
+      const profile = {
+        fullName: window.knockAuth?.user?.name || PROFILE.name,
+        email: window.knockAuth?.user?.email || "",
+        school: facts.school || PROFILE.school || "UC Irvine",
+        story: OB.story || PROFILE.story,
+        resumeText: OB.resumeText || "",
+        target: (OB.targetRoles || []).join(", ") || "founders and operators",
+        goals: ["founder mentorship", "startup roles", "internship opportunities"],
+        industries: OB.industries || ["Startups"],
+        targetRoles: OB.targetRoles || ["Founders"],
+        locations: OB.locations || ["Any"],
+        tone: OB.tone,
+        quantifiedWins: facts.wins,
+        updatedAt: new Date().toISOString(),
+      };
+      localStorage.setItem("knock_profile", JSON.stringify(profile));
+      state.searchMode = PEOPLE_TO_MODE[(OB.targetRoles || [])[0]] || "founders";
+      localStorage.setItem("knock_search_mode", state.searchMode);
       localStorage.setItem("knock_onboarded", "1");
+      localStorage.removeItem("knock_ob_draft");
       closeModal();
-      toast("Welcome to Knock. Your first 5 doors are ready");
+      toast(`Profile built${facts.wins.length ? ` — ${facts.wins.length} quantified win${facts.wins.length === 1 ? "" : "s"} extracted` : ""}. Hit “Find doors” to build your queue`);
+      navigate();
     });
   }
 }

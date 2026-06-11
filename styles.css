@@ -162,6 +162,10 @@ img { display: block; max-width: 100%; }
 .marquee__wrap { overflow: hidden; -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent); mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent); }
 .marquee__track { display: flex; gap: 2.6rem; width: max-content; font-weight: 900; font-size: 1.5rem; letter-spacing: -0.02em; will-change: transform; align-items: center; color: var(--ink); }
 .marquee__track i { color: var(--blue); font-size: 0.9rem; font-style: normal; }
+.mq { display: inline-flex; align-items: center; gap: 0.55rem; white-space: nowrap; opacity: 0.88; }
+.mq img { width: 1.35em; height: 1.35em; object-fit: contain; filter: brightness(0) saturate(100%) invert(13%) sepia(14%) saturate(1100%) hue-rotate(170deg) brightness(95%); }
+.mq--word { font-family: var(--serif, Georgia, serif); font-weight: 700; font-style: italic; letter-spacing: -0.01em; }
+.mq__dot { color: var(--blue); font-style: normal; }
 
 /* ============ stats ============ */
 .stats { padding: clamp(4rem, 9vh, 7rem) clamp(1.2rem, 6vw, 6rem) 0; }
@@ -296,7 +300,10 @@ img { display: block; max-width: 100%; }
 
 /* ============ careers + contact ============ */
 .join { padding: clamp(4rem, 9vh, 7rem) clamp(1.2rem, 6vw, 6rem); }
-.join__grid { display: grid; grid-template-columns: 1.15fr 1fr; gap: 1.2rem; margin-top: 2.6rem; align-items: start; }
+.join__grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; margin-top: 2.6rem; align-items: stretch; max-width: 1180px; margin-left: auto; margin-right: auto; }
+.jcard { display: flex; flex-direction: column; }
+.jcard--form form { flex: 1; }
+.jcard--form textarea { flex: 1; }
 @media (max-width: 900px) { .join__grid { grid-template-columns: 1fr; } }
 .jcard {
   background: var(--card); border: 2px solid var(--border); border-radius: 26px; box-shadow: var(--pop);
@@ -329,8 +336,15 @@ img { display: block; max-width: 100%; }
   background: var(--blue); border: 2px solid var(--border); border-radius: 34px; box-shadow: var(--pop-lg);
   text-align: center; padding: clamp(3.5rem, 9vw, 6.5rem) clamp(1.4rem, 5vw, 5rem);
 }
-.cta__title { font-size: clamp(2.2rem, 5.4vw, 4.4rem); line-height: 1.08; max-width: 22ch; margin: 0 auto 2.2rem; color: #fff; }
-.cta__title em { color: var(--ink); background: #fff; border-radius: 0.18em; padding: 0 0.18em; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.cta__title { font-size: clamp(2.2rem, 5.4vw, 4.4rem); line-height: 1.14; max-width: 22ch; margin: 0 auto 2.2rem; color: #fff; }
+.cta__title em {
+  color: var(--ink); position: relative; z-index: 1; padding: 0 0.16em;
+}
+.cta__title em::before {
+  content: ""; position: absolute; z-index: -1;
+  inset: 0.1em 0 0.02em; /* trimmed top so the box clears descenders on the line above */
+  background: #fff; border-radius: 0.16em;
+}
 .cta__fine { margin-top: 1rem; font-size: 0.84rem; color: #eaf2f9; font-weight: 600; }
 
 /* ============ footer ============ */
@@ -447,3 +461,18 @@ img { display: block; max-width: 100%; }
   .stage__chip--a { left: 2%; } .stage__chip--b { right: 2%; }
 }
 .reduced-motion .scopy[data-i="0"], .reduced-motion .sframe[data-i="0"] { opacity: 1; visibility: visible; position: relative; }
+
+/* voyager: the site-wide paper plane (injected by main.js) */
+#voyager { position: fixed; left: 0; top: 0; z-index: 40; pointer-events: none; opacity: 0; visibility: hidden; }
+#voyager svg { width: 54px; height: auto; display: block; filter: drop-shadow(2px 3px 0 rgba(27, 42, 56, 0.18)); }
+
+/* mobile: the tour un-pins and stacks copy + screenshot pairs */
+.showcase--stacked .showcase__layout { display: block; }
+.showcase--stacked .showcase__copy { min-height: 0; }
+.showcase--stacked .scopy { position: static; opacity: 1; visibility: visible; margin-top: 2.6rem; }
+.showcase--stacked .sframe {
+  position: static; opacity: 1; visibility: visible; transform: none !important;
+  margin-top: 1.2rem; aspect-ratio: 16 / 10;
+}
+.showcase--stacked .showcase__stage,
+.showcase--stacked .showcase__dots { display: none; }

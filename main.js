@@ -155,51 +155,74 @@ if (!reduceMotion) {
   const copies = gsap.utils.toArray(".scopy");
   const sdots = gsap.utils.toArray(".sdot");
   const stageInner = document.getElementById("stage-inner");
-  let phase = 0;
-  gsap.set(copies[0], { autoAlpha: 1 });
+  const showcaseMobile = window.matchMedia("(max-width: 980px)").matches;
 
-  function setPhase(i) {
-    if (i === phase) return;
-    const dir = i > phase ? 1 : -1;
-    /* frames swap with a 3D page-turn feel */
-    gsap.to(frames[phase], { autoAlpha: 0, rotateY: -28 * dir, x: -50 * dir, duration: 0.45, ease: "power2.in" });
-    gsap.fromTo(frames[i], { autoAlpha: 0, rotateY: 32 * dir, x: 70 * dir },
-      { autoAlpha: 1, rotateY: 0, x: 0, duration: 0.55, ease: "power3.out", delay: 0.12 });
-    /* copy crossfade */
-    gsap.to(copies[phase], { autoAlpha: 0, y: -18 * dir, duration: 0.3, ease: "power2.in" });
-    gsap.fromTo(copies[i], { autoAlpha: 0, y: 26 * dir }, { autoAlpha: 1, y: 0, duration: 0.5, ease: "power3.out", delay: 0.1 });
-    /* floating chips swap text with a pop */
-    const [a, b] = CHIP_TEXT[i];
-    [["#schip-a", a], ["#schip-b", b]].forEach(([sel, txt], k) => {
-      const el = document.querySelector(sel);
-      gsap.timeline()
-        .to(el, { scale: 0, duration: 0.18, ease: "power2.in", delay: k * 0.06 })
-        .add(() => (el.textContent = txt))
-        .to(el, { scale: 1, duration: 0.34, ease: "back.out(2.2)" });
+  if (showcaseMobile) {
+    /* mobile: no pin, no 3D swaps — interleave copy + screenshot pairs and stack */
+    document.querySelector(".showcase").classList.add("showcase--stacked");
+    copies.forEach((c, k) => c.insertAdjacentElement("afterend", frames[k]));
+    [...copies, ...frames].forEach((el) => {
+      gsap.fromTo(el, { opacity: 0, y: 26 }, {
+        opacity: 1, y: 0, duration: 0.8, ease: "power2.out",
+        scrollTrigger: { trigger: el, start: "top 88%" },
+      });
     });
-    sdots.forEach((d, k) => d.classList.toggle("is-on", k === i));
-    phase = i;
+  } else {
+    let phase = 0;
+    gsap.set(copies[0], { autoAlpha: 1 });
+
+    const setPhase = (i) => {
+      if (i === phase) return;
+      const dir = i > phase ? 1 : -1;
+      const prev = phase;
+      phase = i;
+      /* kill in-flight tweens so fast back-and-forth scrubbing can't strand a frame mid-swap */
+      gsap.killTweensOf([...frames, ...copies]);
+      frames.forEach((f, k) => { if (k !== i && k !== prev) gsap.set(f, { autoAlpha: 0 }); });
+      copies.forEach((c, k) => { if (k !== i && k !== prev) gsap.set(c, { autoAlpha: 0, y: 0 }); });
+      /* frames swap with a 3D page-turn feel */
+      gsap.to(frames[prev], { autoAlpha: 0, rotateY: -28 * dir, x: -50 * dir, duration: 0.4, ease: "power2.in", overwrite: true });
+      gsap.fromTo(frames[i], { autoAlpha: 0, rotateY: 32 * dir, x: 70 * dir },
+        { autoAlpha: 1, rotateY: 0, x: 0, duration: 0.5, ease: "power3.out", delay: 0.08, overwrite: true });
+      /* copy crossfade */
+      gsap.to(copies[prev], { autoAlpha: 0, y: -18 * dir, duration: 0.28, ease: "power2.in", overwrite: true });
+      gsap.fromTo(copies[i], { autoAlpha: 0, y: 26 * dir }, { autoAlpha: 1, y: 0, duration: 0.45, ease: "power3.out", delay: 0.08, overwrite: true });
+      /* floating chips swap text with a pop */
+      const [a, b] = CHIP_TEXT[i];
+      [["#schip-a", a], ["#schip-b", b]].forEach(([sel, txt], k) => {
+        const el = document.querySelector(sel);
+        gsap.killTweensOf(el);
+        gsap.timeline()
+          .to(el, { scale: 0, duration: 0.16, ease: "power2.in", delay: k * 0.05 })
+          .add(() => (el.textContent = txt))
+          .to(el, { scale: 1, duration: 0.3, ease: "back.out(2.2)" });
+      });
+      sdots.forEach((d, k) => d.classList.toggle("is-on", k === i));
+    };
+
+    ScrollTrigger.create({
+      trigger: ".showcase",
+      start: "top top",
+      end: "+=2400",
+      pin: ".showcase__pin",
+      scrub: true,
+      anticipatePin: 1,
+      onUpdate: (self) => setPhase(Math.min(3, Math.floor(self.progress * 4))),
+      /* settle between phases so the scrub never parks mid-swap */
+      snap: { snapTo: [0.125, 0.375, 0.625, 0.875], duration: 0.4, delay: 0.15, ease: "power2.out" },
+    });
+
+    /* mouse parallax tilt on the stage */
+    const stage = document.getElementById("stage");
+    stage.addEventListener("pointermove", (e) => {
+      const r = stage.getBoundingClientRect();
+      const px = (e.clientX - r.left) / r.width - 0.5;
+      const py = (e.clientY - r.top) / r.height - 0.5;
+      gsap.to(stageInner, { rotateY: px * 9, rotateX: -py * 7, duration: 0.5, ease: "power2.out" });
+    });
+    stage.addEventListener("pointerleave", () =>
+      gsap.to(stageInner, { rotateY: 0, rotateX: 0, duration: 0.8, ease: "elastic.out(1, 0.5)" }));
   }
-
-  ScrollTrigger.create({
-    trigger: ".showcase",
-    start: "top top",
-    end: "+=2400",
-    pin: ".showcase__pin",
-    scrub: true,
-    onUpdate: (self) => setPhase(Math.min(3, Math.floor(self.progress * 4))),
-  });
-
-  /* mouse parallax tilt on the stage */
-  const stage = document.getElementById("stage");
-  stage.addEventListener("pointermove", (e) => {
-    const r = stage.getBoundingClientRect();
-    const px = (e.clientX - r.left) / r.width - 0.5;
-    const py = (e.clientY - r.top) / r.height - 0.5;
-    gsap.to(stageInner, { rotateY: px * 9, rotateX: -py * 7, duration: 0.5, ease: "power2.out" });
-  });
-  stage.addEventListener("pointerleave", () =>
-    gsap.to(stageInner, { rotateY: 0, rotateX: 0, duration: 0.8, ease: "elastic.out(1, 0.5)" }));
 
   /* ---------------- Knocky skates across on scroll ---------------- */
   const strip = document.getElementById("skate-strip");
@@ -223,6 +246,36 @@ if (!reduceMotion) {
   };
   strip.addEventListener("click", kickflip);
   strip.addEventListener("mouseenter", kickflip);
+
+  /* ---------------- voyager: a paper plane rides the whole page ---------------- */
+  if (!showcaseMobile) {
+    const voyager = document.createElement("div");
+    voyager.id = "voyager";
+    voyager.setAttribute("aria-hidden", "true");
+    voyager.innerHTML = `<svg viewBox="0 0 40 34"><path d="M2 4 L36 12 L10 20 L14 30 Z" fill="#fff" stroke="#1b2a38" stroke-width="2.5" stroke-linejoin="round"/></svg>`;
+    document.body.appendChild(voyager);
+    gsap.set(voyager, { xPercent: -50, yPercent: -50, left: "4vw", top: "70vh", autoAlpha: 0 });
+
+    /* waypoints in viewport coords; the timeline is scrubbed across the full page scroll */
+    const LEGS = [
+      { left: "8vw",  top: "72vh", rotation: -8,  autoAlpha: 0 },   // hold while the hero plane flies
+      { left: "12vw", top: "66vh", rotation: -12, autoAlpha: 1 },   // picks up after the hero
+      { left: "88vw", top: "26vh", rotation: -20 },                 // climbs across the stats strip
+      { left: "10vw", top: "58vh", rotation: 16 },                  // banks back over the product tour
+      { left: "90vw", top: "70vh", rotation: -4 },                  // glides through how-it-works
+      { left: "12vw", top: "24vh", rotation: -24 },                 // loops up past the wins
+      { left: "86vw", top: "48vh", rotation: 8 },                   // crosses pricing
+      { left: "50vw", top: "62vh", rotation: 2 },                   // lines up on the CTA
+      { left: "50vw", top: "86vh", rotation: 12, autoAlpha: 0 },    // lands and fades before the footer
+    ];
+    const vtl = gsap.timeline({
+      defaults: { ease: "sine.inOut" },
+      scrollTrigger: { trigger: document.body, start: "top top", end: "bottom bottom", scrub: 1.6 },
+    });
+    LEGS.forEach((leg, k) => vtl.to(voyager, { ...leg, duration: k === 0 ? 0.6 : 1 }));
+    /* gentle idle bob on top of the flight path */
+    gsap.to("#voyager svg", { y: -9, rotation: 4, transformOrigin: "50% 50%", duration: 1.4, yoyo: true, repeat: -1, ease: "sine.inOut" });
+  }
 
   /* ---------------- footer wordmark ripple ---------------- */
   document.querySelectorAll(".footer__giant .ltr").forEach((l) => {
