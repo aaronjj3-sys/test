@@ -66,6 +66,9 @@ const server = http.createServer(async (req, res) => {
   try {
     const data = await readFile(fp);
     res.setHeader("Content-Type", MIME[path.extname(fp)] || "application/octet-stream");
+    if ([".html", ".css", ".js"].includes(path.extname(fp))) {
+      res.setHeader("Cache-Control", "no-store");
+    }
     res.end(data);
   } catch {
     res.statusCode = 404;

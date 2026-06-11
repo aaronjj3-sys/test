@@ -663,11 +663,13 @@ tbody tr:hover { background: var(--accent-soft); }
 .authgate__card h2 { font-size: 1.3rem; margin-top: 0.8rem; }
 .authgate__card > p { color: var(--ink-soft); font-size: 0.88rem; margin: 0.4rem 0 1.4rem; }
 .authbtn {
-  display: block; width: 100%; margin-bottom: 0.6rem; padding: 0.7rem 1rem;
+  display: flex; align-items: center; justify-content: center; gap: 0.55rem;
+  width: 100%; margin-bottom: 0.6rem; padding: 0.7rem 1rem;
   font: 700 0.9rem var(--sans); color: var(--ink); background: #fff;
   border: 2px solid var(--border); border-radius: 999px; cursor: pointer;
   transition: transform 0.15s, box-shadow 0.15s;
 }
+.authbtn__logo { width: 18px; height: 18px; flex: none; }
 .authbtn:hover { transform: translate(-2px, -2px); box-shadow: 3px 3px 0 var(--border); }
 .authbtn--accent { background: var(--accent); color: #fff; }
 .authgate__or { display: flex; align-items: center; gap: 0.8rem; margin: 1rem 0; color: var(--ink-faint); font-size: 0.75rem; font-weight: 700; }
