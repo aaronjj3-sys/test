@@ -1,9 +1,38 @@
 # Knock — cold outreach that lands jobs
 
-A single-page B2B SaaS marketing site for **Knock**, a cold-outreach platform that helps
-high schoolers, college students, and job seekers email their way to opportunities —
-finding real people (recruiters, alumni, hiring managers), drafting the first line,
-and timing every follow-up.
+**Knock** is a cold-outreach opportunity agent for high schoolers, college students,
+and job seekers: it sources real people (YC founders, alumni, hiring managers, PE/VC
+contacts), drafts the first line in *your* voice, and follows up until doors open.
+
+Two parts:
+
+1. **Landing page** (`index.html`) — 3D scroll-driven marketing site
+2. **App MVP** (`app/`) — the Jobright/Tsenta-style dashboard behind the CTA
+
+## The app MVP (`app/`)
+
+Zero-build SPA (vanilla JS, hash routing). Flows that work today:
+
+- **Onboarding questionnaire** — resume dropzone + "what are you actually like?"
+  personality chips ("Allergic to average", "Will do whatever it takes") that calibrate
+  the agent's writing voice
+- **Dashboard** — Tsenta-style pastel top-match cards with match rings, stat row
+  (sent / open rate / replies / meetings), all-outreach table, "Knock on all 5"
+- **Find people** — directory sourced from YC / alumni / live hiring signals / PE-VC,
+  filterable by source and ask (jobs · coffee chats · case-comp sponsors), each card
+  shows a live "signal" and a match ring
+- **The agent drawer (the wow)** — click *Knock* and Scout visibly researches the
+  person, finds the hook, drafts a personalized email typewriter-style in your voice,
+  shows the follow-up plan, and waits for *Approve & send*
+- **Simulated life** — after sending: an "opened" toast at ~9s, then a reply at ~19s
+  that lands as a 🔥 warm thread in the Inbox and advances the Tracker
+- **Inbox** — warm-threads-first, Scout can draft replies
+- **Tracker** — drag-and-drop kanban: Drafted → Sent → Opened → Replied → Meeting
+- **Profile** — everything the agent knows about you, inline-editable story, traits,
+  voice settings
+- **Settings** — agent autonomy toggles, Gmail/Calendar integrations, plan & knocks
+
+## Landing page
 
 Design direction: warm "paper & ink" world (cream paper, ink black, signal-orange accent,
 Fraunces serif display type) — a fusion of Granola's warm minimalism and Tsenta's bold
