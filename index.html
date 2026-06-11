@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Knock. Opportunity doesn't knock. You do.</title>
+  <meta name="description" content="Knock is a cold-outreach agent for students and job seekers. It finds the right people, drafts the first line in your voice, and follows up until doors open." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='26' fill='%235e91bd'/><rect x='38' y='30' width='30' height='46' rx='6' fill='white'/><circle cx='61' cy='53' r='3.5' fill='%235e91bd'/><path d='M30 38q-8 4-9 13M35 30q-5 1-8 6' stroke='white' stroke-width='5' stroke-linecap='round' fill='none'/></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,400..900;1,400..900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ===================== PILL NAV (condenses on scroll) ===================== -->
+  <header class="nav" id="nav">
+    <a class="nav__logo" href="#top" aria-label="Knock home">
+      <svg class="nav__mark" viewBox="0 0 100 100" aria-hidden="true">
+        <rect width="100" height="100" rx="26" fill="#5e91bd"/>
+        <rect x="38" y="30" width="30" height="46" rx="6" fill="#fff"/>
+        <circle cx="61" cy="53" r="3.5" fill="#5e91bd"/>
+        <path d="M30 38q-8 4-9 13M35 30q-5 1-8 6" stroke="#fff" stroke-width="5" stroke-linecap="round" fill="none"/>
+      </svg>
+      <b>knock</b>
+    </a>
+    <nav class="nav__links">
+      <a href="#product">Product</a>
+      <a href="#how">How it works</a>
+      <a href="#voices">Wins</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#careers">Careers</a>
+    </nav>
+    <a class="btn btn--sm" href="app/index.html">Start knocking</a>
+  </header>
+
+  <main id="top">
+
+    <!-- ===================== HERO ===================== -->
+    <section class="hero">
+      <div class="hero__card">
+        <div class="hero__copy">
+          <div class="hero__chips reveal">
+            <span class="chip chip--lead">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="2.5" fill="#5e91bd"/><circle cx="15" cy="12.5" r="1.4" fill="#fff"/></svg>
+              Your cold-outreach agent
+            </span>
+            <span class="chip">Jobs</span>
+            <span class="chip">Coffee chats</span>
+            <span class="chip">Sponsors</span>
+          </div>
+          <h1 class="hero__title" data-split>Opportunity doesn’t knock. <em>You do.</em></h1>
+          <p class="hero__sub reveal">
+            Knock finds the right people: YC founders, alumni, hiring managers.
+            It drafts the first line in <b>your</b> voice and follows up until doors open.
+            Built for students and job seekers with zero network. Yet.
+          </p>
+          <div class="hero__actions reveal">
+            <a class="btn btn--paper btn--lg" href="app/index.html">Start free, no resume required</a>
+            <a class="hero__alt" href="#product">or watch the agent work ↓</a>
+          </div>
+        </div>
+
+        <!-- paper plane doodle flies across the card -->
+        <svg class="hero__flight" viewBox="0 0 900 300" fill="none" aria-hidden="true">
+          <path id="flight-path" d="M-40 230 C 160 120, 360 260, 520 150 S 820 60, 940 110" stroke="rgba(255,255,255,.55)" stroke-width="3" stroke-dasharray="10 12" stroke-linecap="round"/>
+          <g id="flight-plane">
+            <path d="M0 0 L34 10 L6 18 L10 30 Z" fill="#fff" stroke="#1b2a38" stroke-width="2.5" stroke-linejoin="round"/>
+          </g>
+        </svg>
+      </div>
+
+      <div class="frame-wrap">
+        <figure class="frame" id="hero-frame">
+          <div class="frame__bar">
+            <span class="dot dot--r"></span><span class="dot dot--y"></span><span class="dot dot--g"></span>
+            <span class="frame__url">knock.app / dashboard</span>
+          </div>
+          <img src="assets/ui-dashboard.png" alt="The Knock dashboard: top doors ranked for you, outreach stats, every thread in one place" />
+          <div class="float-chip float-chip--reply" id="chip-reply"><b>Maya replied</b>, warm thread in your inbox</div>
+          <div class="float-chip float-chip--match" id="chip-match"><span class="chip-ring">96%</span> Elena Cruz · YC W26 · <b>hiring ops</b></div>
+          <div class="float-chip float-chip--sent" id="chip-sent">Knock delivered · follow-up planned Day 3</div>
+        </figure>
+      </div>
+    </section>
+
+    <!-- ===================== MARQUEE ===================== -->
+    <section class="marquee">
+      <p class="marquee__label">Knock users opened doors at</p>
+      <div class="marquee__wrap">
+        <div class="marquee__track">
+          <span>Stripe</span><i>✦</i><span>Figma</span><i>✦</i><span>YC startups</span><i>✦</i>
+          <span>Anduril</span><i>✦</i><span>Deloitte</span><i>✦</i><span>Disney</span><i>✦</i>
+          <span>NASA JPL</span><i>✦</i><span>Ramp</span><i>✦</i><span>PE &amp; VC firms</span><i>✦</i>
+          <span>Research labs</span><i>✦</i><span>City Hall</span><i>✦</i><span>Local studios</span><i>✦</i>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== STATS ===================== -->
+    <section class="stats">
+      <p class="eyebrow">/01 · The problem</p>
+      <h2 class="section-title" data-split>Job boards are where applications go to <em>die.</em></h2>
+      <div class="stats__row">
+        <div class="stat reveal-card">
+          <div class="stat__num"><span data-count="2">0</span>%</div>
+          <p>of “Easy Apply” applications ever get a human reply</p>
+        </div>
+        <div class="stat stat--vs reveal-card"><span>vs</span></div>
+        <div class="stat stat--hot reveal-card">
+          <div class="stat__num"><span data-count="71">0</span>%</div>
+          <p>open rate on Knock outreach. Real people, real first lines</p>
+        </div>
+        <div class="stat reveal-card">
+          <div class="stat__num"><span data-count="19">0</span> days</div>
+          <p>median time from first knock to first meeting booked</p>
+        </div>
+      </div>
+
+      <!-- Knocky rides across on scroll; click for a kickflip -->
+      <div class="skate" id="skate-strip" title="click him!">
+        <svg class="knocky" id="knocky" viewBox="0 0 140 150" aria-hidden="true">
+          <g id="knocky-body">
+            <rect x="38" y="18" width="64" height="74" rx="18" fill="#5e91bd" stroke="#1b2a38" stroke-width="3.5"/>
+            <rect x="56" y="40" width="28" height="44" rx="7" fill="#fff" stroke="#1b2a38" stroke-width="2.5"/>
+            <circle cx="78" cy="62" r="3" fill="#5e91bd"/>
+            <circle cx="56" cy="34" r="5.5" fill="#fff" stroke="#1b2a38" stroke-width="2.5"/>
+            <circle cx="84" cy="34" r="5.5" fill="#fff" stroke="#1b2a38" stroke-width="2.5"/>
+            <circle cx="57.5" cy="35" r="2" fill="#1b2a38"/>
+            <circle cx="85.5" cy="35" r="2" fill="#1b2a38"/>
+            <path d="M62 22 Q70 16 78 22" stroke="#1b2a38" stroke-width="3" fill="none" stroke-linecap="round"/>
+            <path d="M38 52 q-14 2 -16 14M102 52 q14 2 16 14" stroke="#1b2a38" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+            <path d="M58 92 v14M82 92 v14" stroke="#1b2a38" stroke-width="3.5" stroke-linecap="round"/>
+          </g>
+          <g id="knocky-board">
+            <rect x="22" y="108" width="96" height="9" rx="4.5" fill="#1b2a38"/>
+            <circle cx="44" cy="124" r="8" fill="#fff" stroke="#1b2a38" stroke-width="3.5"/>
+            <circle cx="96" cy="124" r="8" fill="#fff" stroke="#1b2a38" stroke-width="3.5"/>
+          </g>
+        </svg>
+        <div class="skate__ground"></div>
+      </div>
+    </section>
+
+    <!-- ===================== SHOWCASE / PRODUCT (pinned 3D) ===================== -->
+    <section class="showcase" id="product">
+      <div class="showcase__pin">
+        <div class="showcase__head">
+          <p class="eyebrow">/02 · The agent</p>
+          <h2 class="section-title" data-split>An agent that <em>actually knocks.</em></h2>
+        </div>
+        <div class="showcase__layout">
+          <div class="showcase__copy">
+            <div class="scopy" data-i="0">
+              <h3>Watch it draft, live</h3>
+              <p>Scout researches the person, finds the hook, and typewrites a note in your voice, follow-up plan attached.</p>
+              <ul><li>Calibrated by your questionnaire: direct &amp; warm, under 120 words</li><li>Nothing sends without your approval</li></ul>
+            </div>
+            <div class="scopy" data-i="1">
+              <h3>People, not postings</h3>
+              <p>Sourced from the YC directory, your alumni network, live hiring signals, and PE/VC rosters.</p>
+              <ul><li>Every row has a live signal, not a stale listing</li><li>Ranked by who will actually answer you</li></ul>
+            </div>
+            <div class="scopy" data-i="2">
+              <h3>Warm threads first</h3>
+              <p>Scout watches every thread and flags the doors that are opening, so the reply that matters never gets buried.</p>
+              <ul><li>Open and reply detection across your inboxes</li><li>One click to let Scout draft the response</li></ul>
+            </div>
+            <div class="scopy" data-i="3">
+              <h3>Every door, one funnel</h3>
+              <p>Drafted, sent, opened, replied, meeting booked. The whole hunt in one view, follow-ups handled.</p>
+              <ul><li>Day 3 and Day 7 nudges, timed to their reading hours</li><li>Then it stops. Persistence, not pestering</li></ul>
+            </div>
+            <div class="showcase__dots" aria-hidden="true">
+              <i class="sdot is-on"></i><i class="sdot"></i><i class="sdot"></i><i class="sdot"></i>
+            </div>
+          </div>
+          <div class="showcase__stage" id="stage">
+            <div class="stage__inner" id="stage-inner">
+              <figure class="sframe is-on" data-i="0"><img src="assets/ui-drawer.png" alt="The agent drawer drafting a personalized email" /></figure>
+              <figure class="sframe" data-i="1"><img src="assets/ui-people.png" alt="The people directory with live signals and match scores" /></figure>
+              <figure class="sframe" data-i="2"><img src="assets/ui-inbox.png" alt="The inbox with a warm reply flagged" /></figure>
+              <figure class="sframe" data-i="3"><img src="assets/ui-tracker.png" alt="The outreach funnel tracker" /></figure>
+            </div>
+            <div class="stage__chip stage__chip--a" id="schip-a">Reply likelihood: High</div>
+            <div class="stage__chip stage__chip--b" id="schip-b">Send at 9:41 AM her time</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== HOW ===================== -->
+    <section class="how" id="how">
+      <div class="how__sticky">
+        <p class="eyebrow">/03 · How it works</p>
+        <h2 class="section-title">Three knocks to an open door</h2>
+        <a class="btn btn--accent" href="app/index.html">Try it free →</a>
+      </div>
+      <div class="how__steps">
+        <article class="hstep">
+          <span class="hstep__num">01</span>
+          <h3>Tell Scout who you are</h3>
+          <p>Drop a resume or just talk: “built a $400K business in high school, allergic to average.” A two-minute questionnaire teaches the agent your story, your voice, and what doors you want opened: jobs, coffee chats, or case-comp sponsors.</p>
+        </article>
+        <article class="hstep">
+          <span class="hstep__num">02</span>
+          <h3>Pick a door</h3>
+          <p>Every morning Scout sources new people: founders from the YC directory, alumni eight years ahead of you, hiring managers with reqs that opened five hours ago. Each comes with a live signal and a match score built around <em>you</em>.</p>
+        </article>
+        <article class="hstep">
+          <span class="hstep__num">03</span>
+          <h3>Approve &amp; knock</h3>
+          <p>Scout drafts in your voice, you approve, it sends from your real address at their reading hours. Then it tracks opens, works the follow-ups, and wakes you the second a thread turns warm.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ===================== VOICES ===================== -->
+    <section class="voices" id="voices">
+      <h2 class="section-title" data-split>Doors that <em>opened</em></h2>
+      <div class="voices__row">
+        <figure class="voice reveal-card">
+          <blockquote>“I’m 17. I knocked on twelve game studios and got two studio tours and a summer QA internship. My counselor thought I knew somebody. I didn’t.”</blockquote>
+          <figcaption><b>Dex M.</b> · high school junior, Ohio</figcaption>
+        </figure>
+        <figure class="voice reveal-card">
+          <blockquote>“120 Easy Applies: zero interviews. 31 knocks: 9 replies, 4 calls, 1 offer. I keep the spreadsheet as a souvenir.”</blockquote>
+          <figcaption><b>Priya S.</b> · CS senior, UC Irvine</figcaption>
+        </figure>
+        <figure class="voice reveal-card">
+          <blockquote>“Laid off at 41, no network in my new city. Scout found alumni from a bootcamp I did years ago. Hired in six weeks.”</blockquote>
+          <figcaption><b>Tom R.</b> · career switcher, Denver</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- ===================== PRICING ===================== -->
+    <section class="pricing" id="pricing">
+      <p class="eyebrow">/04 · Pricing</p>
+      <h2 class="section-title" data-split>Priced like you’re <em>broke.</em> Because we remember.</h2>
+      <div class="pricing__grid">
+        <article class="price reveal-card">
+          <h3>Student</h3>
+          <div class="price__num">$0</div>
+          <p class="price__note">forever, with a school email</p>
+          <ul><li>15 knocks / month</li><li>YC + alumni sourcing</li><li>Drafts in your voice</li><li>Reply tracking</li></ul>
+          <a class="btn btn--ghost btn--full" href="app/index.html">Start free</a>
+        </article>
+        <article class="price price--hot reveal-card">
+          <span class="price__badge">Most popular</span>
+          <h3>Pro</h3>
+          <div class="price__num">$19<span>/mo</span></div>
+          <p class="price__note">for the full-on hunt</p>
+          <ul><li>Unlimited knocks</li><li>Follow-up autopilot</li><li>Inbox warm-up</li><li>Warm-threads inbox</li><li>Priority people data</li></ul>
+          <a class="btn btn--paper btn--full" href="app/index.html">Go Pro</a>
+        </article>
+        <article class="price reveal-card">
+          <h3>Campus</h3>
+          <div class="price__num">Custom</div>
+          <p class="price__note">career centers &amp; bootcamps</p>
+          <ul><li>Seats for every student</li><li>Outcomes dashboard</li><li>Coaching workflows</li><li>SSO &amp; FERPA-ready</li></ul>
+          <a class="btn btn--ghost btn--full" href="#careers">Talk to us</a>
+        </article>
+      </div>
+    </section>
+
+    <!-- ===================== CAREERS + CONTACT ===================== -->
+    <section class="join" id="careers">
+      <p class="eyebrow">/05 · Say hi</p>
+      <h2 class="section-title" data-split>Work with us. Or just <em>knock.</em></h2>
+      <div class="join__grid">
+        <div class="jcard reveal-card">
+          <h3>Careers</h3>
+          <p>We are a tiny team teaching students to kick down doors. Practice what you preach: cold email us and we will actually read it.</p>
+          <ul class="roles">
+            <li><div><b>Founding UI/UX Designer</b><small>Remote / Irvine, CA · full-time · equity-heavy</small></div><a class="btn btn--sm" href="mailto:careers@knock.app?subject=Founding%20UI%2FUX%20Designer%20(I'm%20knocking)">Apply</a></li>
+            <li><div><b>Founding Full-stack Developer</b><small>Remote / Irvine, CA · full-time · equity-heavy</small></div><a class="btn btn--sm" href="mailto:careers@knock.app?subject=Founding%20Full-stack%20Developer%20(I'm%20knocking)">Apply</a></li>
+            <li><div><b>Founding Growth Marketer</b><small>Remote · full-time or fractional</small></div><a class="btn btn--sm" href="mailto:careers@knock.app?subject=Founding%20Growth%20Marketer%20(I'm%20knocking)">Apply</a></li>
+            <li><div><b>Campus Lead, UCI</b><small>Irvine, CA · part-time · equity + free Pro</small></div><a class="btn btn--sm" href="mailto:careers@knock.app?subject=Campus%20Lead%20(I'm%20knocking)">Apply</a></li>
+            <li><div><b>Your role isn't listed</b><small>Convince us. The right person beats the right req</small></div><a class="btn btn--sm" href="mailto:careers@knock.app?subject=The%20role%20you%20didn't%20know%20you%20needed">Knock</a></li>
+          </ul>
+          <p class="roles__fine">No resume required. One great first line beats ten bullet points.</p>
+        </div>
+        <div class="jcard jcard--form reveal-card" id="contact">
+          <h3>Contact us</h3>
+          <p>Questions, partnerships, press, or a career center that wants Knock on campus.</p>
+          <form id="contact-form">
+            <input type="text" name="name" placeholder="Your name" required />
+            <input type="email" name="email" placeholder="you@school.edu" required />
+            <textarea name="msg" rows="4" placeholder="What's on your mind?" required></textarea>
+            <button class="btn btn--accent btn--full" type="submit">Send it</button>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== CTA ===================== -->
+    <section class="cta">
+      <div class="cta__card reveal-card">
+        <h2 class="cta__title" data-split>Somewhere, your future manager’s inbox is quiet. <em>Change that.</em></h2>
+        <a class="btn btn--paper btn--lg" href="app/index.html">Start knocking, free</a>
+        <p class="cta__fine">No credit card. Your first draft in under 2 minutes.</p>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ===================== FOOTER ===================== -->
+  <footer class="footer">
+    <div class="footer__top">
+      <div class="footer__about">
+        <a class="footer__logo" href="#top">
+          <svg viewBox="0 0 100 100" aria-hidden="true">
+            <rect width="100" height="100" rx="26" fill="#fff"/>
+            <rect x="38" y="30" width="30" height="46" rx="6" fill="#5e91bd"/>
+            <circle cx="61" cy="53" r="3.5" fill="#fff"/>
+            <path d="M30 38q-8 4-9 13M35 30q-5 1-8 6" stroke="#5e91bd" stroke-width="5" stroke-linecap="round" fill="none"/>
+          </svg>
+          <b>knock</b>
+        </a>
+        <p>Your cold-outreach agent. Jobs, coffee chats, sponsors. All the scary first lines, drafted in your voice and sent at the right time. You build the courage once; Knock handles the rest.</p>
+      </div>
+      <div class="footer__cols">
+        <div>
+          <h4>Product</h4>
+          <a href="#product">The agent</a>
+          <a href="#how">How it works</a>
+          <a href="#pricing">Pricing</a>
+          <a href="app/index.html">Open the app</a>
+        </div>
+        <div>
+          <h4>Company</h4>
+          <a href="#voices">Wins</a>
+          <a href="#careers">Careers</a>
+          <a href="#contact">Contact us</a>
+        </div>
+        <div>
+          <h4>Resources</h4>
+          <a href="privacy.html">Privacy</a>
+          <a href="terms.html">Terms</a>
+          <a href="mailto:support@knock.app">Support</a>
+        </div>
+      </div>
+    </div>
+    <div class="footer__meta">
+      <span>© 2026 Knock Labs, Inc. Be kind in other people’s inboxes.</span>
+      <span class="footer__social"><a href="#top">Twitter</a><a href="#top">Discord</a><a href="#top">LinkedIn</a></span>
+    </div>
+    <div class="footer__giant" id="footer-giant" aria-hidden="true"><!-- letters injected by JS --></div>
+  </footer>
+
+  <script src="vendor/gsap.min.js"></script>
+  <script src="vendor/ScrollTrigger.min.js"></script>
+  <script src="vendor/lenis.min.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
