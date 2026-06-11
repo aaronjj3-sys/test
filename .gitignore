@@ -2,12 +2,13 @@ node_modules/
 .next/
 dist/
 out/
+public/
 *.log
 /.cache
-package-lock.json
 
 .env
 .env.local
+.env.local.*
 .env*.local
 env.local
 .vercel

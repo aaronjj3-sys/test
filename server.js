@@ -66,11 +66,24 @@ const server = http.createServer(async (req, res) => {
   try {
     const data = await readFile(fp);
     res.setHeader("Content-Type", MIME[path.extname(fp)] || "application/octet-stream");
+    if ([".html", ".css", ".js"].includes(path.extname(fp))) {
+      res.setHeader("Cache-Control", "no-store");
+    }
     res.end(data);
   } catch {
     res.statusCode = 404;
     res.end("Not found");
   }
+});
+
+server.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(`Port ${PORT} is already in use.`);
+    console.error("Close the other dev server or run with a different port, for example: PORT=8001 npm run dev");
+    process.exit(1);
+  }
+
+  throw err;
 });
 
 server.listen(PORT, () => {
