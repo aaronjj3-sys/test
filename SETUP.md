@@ -12,10 +12,9 @@ node server.js     # serves the static site AND all /api routes on :8000
 npm test           # sourcing/scoring unit checks
 ```
 
-If you prefer your Next.js setup (`npm run dev`), the same engine is exposed
-through Next route handlers (`app/api/**/route.js`) — but `next dev` serves
-only the API, not the static landing/app pages, so `node server.js` is the
-one-command way to run everything together.
+`npm run dev` runs this same server. The Next.js files in this repo are not
+the production path for the current MVP; keep Vercel on the static frontend +
+`api/` functions setup until the frontend is fully converted to Next.
 
 Without keys the app runs in **mock mode**: sourcing returns demo doors
 (clearly labeled), auth runs in dev mode. Every flow is testable.
@@ -106,8 +105,13 @@ contact states) is documented in `lib/gmail/`.
 The repo is Vercel-ready (static frontend + `api/` functions):
 
 1. https://vercel.com → Import the GitHub repo.
-2. Add the env vars from `.env.local` in Project Settings.
-3. Add your production URL to Supabase → Authentication → URL configuration.
+2. In Build & Development Settings:
+   - Framework Preset: **Other**
+   - Build Command: `npm run build`
+   - Output Directory: leave blank
+   - Install Command: `npm install`
+3. Add the env vars from `.env.local` in Project Settings.
+4. Add your production URL to Supabase Authentication URL configuration.
 
 ## One note on the logo marquee
 

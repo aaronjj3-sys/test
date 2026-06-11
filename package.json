@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "dev:static": "node server.js",
+    "dev": "node server.js",
+    "start": "node server.js",
+    "build": "node scripts/vercel-build-check.js",
+    "dev:next": "next dev -p 3000",
     "test": "node test/sourcing.test.js"
   },
   "dependencies": {
