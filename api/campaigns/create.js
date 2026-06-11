@@ -37,7 +37,7 @@ export default function handler(req, res) {
     messages,
     meta: {
       sent: false,
-      note: "Campaign queued. Gmail sending is not connected yet — nothing was sent.",
+      note: "Campaign queued. Gmail sending is not connected yet, so nothing was sent.",
       persisted: "client", // becomes "supabase" once the DB is wired
     },
   });

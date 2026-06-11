@@ -110,7 +110,7 @@ img { display: block; max-width: 100%; }
 .hero__alt { color: #eaf2f9; font-weight: 700; font-size: 0.92rem; text-decoration: underline; text-underline-offset: 4px; }
 .hero__alt:hover { color: #fff; }
 
-.hero__flight { position: absolute; left: 0; right: 0; bottom: 6%; width: 100%; height: auto; z-index: 1; pointer-events: none; }
+.hero__flight { position: absolute; left: 0; right: 0; bottom: 6%; width: 100%; height: auto; z-index: 1; pointer-events: none; overflow: visible; }
 
 /* dashboard frame pops up out of the blue card */
 .frame-wrap { width: min(1080px, 92vw); margin: clamp(-8rem, -13vw, -10rem) auto 0; position: relative; z-index: 3; }
@@ -444,6 +444,7 @@ img { display: block; max-width: 100%; }
   position: absolute; inset: 0; margin: 0; opacity: 0; visibility: hidden;
   border: 2px solid var(--border); border-radius: 22px; overflow: hidden;
   background: #fff; box-shadow: var(--pop-lg); will-change: transform, opacity;
+  backface-visibility: hidden; -webkit-backface-visibility: hidden;
 }
 .sframe.is-on { opacity: 1; visibility: visible; }
 .sframe img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
@@ -476,3 +477,43 @@ img { display: block; max-width: 100%; }
 }
 .showcase--stacked .showcase__stage,
 .showcase--stacked .showcase__dots { display: none; }
+
+
+/* ============ login overlay (shared with the app) ============ */
+#authgate {
+  position: fixed; inset: 0; z-index: 200; display: grid; place-items: center;
+  background: rgba(27, 42, 56, 0.55); backdrop-filter: blur(6px); animation: gatefade 0.25s ease;
+}
+@keyframes gatefade { from { opacity: 0; } }
+.authgate__card {
+  position: relative; width: min(400px, 92vw); background: #fff; border: 2px solid var(--border);
+  border-radius: 26px; box-shadow: 6px 6px 0 var(--border); padding: 2.2rem 2rem; text-align: center;
+}
+.authgate__x {
+  position: absolute; top: 0.9rem; right: 0.9rem; width: 30px; height: 30px;
+  background: var(--card, #fff); border: 1.5px solid var(--border); border-radius: 50%;
+  font-size: 1rem; line-height: 1; color: var(--ink); cursor: pointer; box-shadow: 2px 2px 0 var(--border);
+}
+.authgate__x:hover { transform: translate(-1px, -1px); box-shadow: 3px 3px 0 var(--border); }
+.authgate__logo { font-size: 1.5rem; font-weight: 900; letter-spacing: -0.04em; }
+.authgate__logo i { color: var(--blue, #5e91bd); font-style: normal; }
+.authgate__card h2 { font-size: 1.3rem; margin-top: 0.8rem; }
+.authgate__card > p { color: var(--ink-soft); font-size: 0.88rem; margin: 0.4rem 0 1.4rem; }
+.authbtn {
+  display: flex; align-items: center; justify-content: center; gap: 0.55rem;
+  width: 100%; margin-bottom: 0.6rem; padding: 0.7rem 1rem;
+  font: 700 0.9rem var(--sans); color: var(--ink); background: #fff;
+  border: 2px solid var(--border); border-radius: 999px; cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.authbtn:hover { transform: translate(-2px, -2px); box-shadow: 3px 3px 0 var(--border); }
+.authbtn--accent { background: var(--blue, #5e91bd); color: #fff; }
+.authgate__or { display: flex; align-items: center; gap: 0.8rem; margin: 1rem 0; color: var(--ink-faint); font-size: 0.75rem; font-weight: 700; }
+.authgate__or::before, .authgate__or::after { content: ""; flex: 1; height: 2px; background: var(--line); }
+#auth-email input {
+  width: 100%; margin-bottom: 0.6rem; padding: 0.7rem 1rem; box-sizing: border-box;
+  font: 600 0.9rem var(--sans); border: 2px solid var(--border); border-radius: 999px; outline: none;
+}
+.authgate__note { font-size: 0.78rem; font-weight: 600; color: var(--blue-deep, #3e6b94); min-height: 1em; margin-top: 0.4rem; }
+.authgate__fine { font-size: 0.68rem; color: var(--ink-faint); margin-top: 1rem; line-height: 1.5; }
+.authgate__fine a { color: var(--blue-deep, #3e6b94); }

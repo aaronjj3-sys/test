@@ -1,88 +1,130 @@
-/* Knock auth gate.
-   With app/config.js (Supabase URL + anon key) present → real auth:
-   Google OAuth, LinkedIn OIDC, or email magic link via Supabase.
-   Without it → dev mode: the demo continues on localStorage, clearly labeled. */
+/* Knock auth.
+   Loaded by BOTH the landing page and the app shell.
+
+   With app/config.js (Supabase URL + anon key) present, real auth runs:
+   Google OAuth or an email magic link via Supabase.
+   Without it, a clearly-labeled dev login is offered so the product can
+   be tested end to end with no credentials.
+
+   Exposes:
+     window.knockAuth = { mode, user, client, ready, signOut, openLogin } */
 
 (function () {
   const cfg = window.KNOCK_CONFIG;
   const hasSupabase = cfg && cfg.supabaseUrl && !cfg.supabaseUrl.includes("YOUR-PROJECT") && window.supabase;
+  const inApp = /\/app\//.test(location.pathname);
+  const appUrl = inApp ? location.href.split("#")[0] : new URL("app/index.html", location.href).href;
+  const landingUrl = inApp ? "../index.html" : "index.html";
 
-  window.knockAuth = { mode: "dev", user: null, client: null, signOut: () => {} };
+  const auth = (window.knockAuth = {
+    mode: hasSupabase ? "supabase" : "dev",
+    user: null,
+    client: null,
+    ready: null,
+    signOut: async () => {},
+    openLogin,
+  });
 
-  if (!hasSupabase) {
-    /* dev fallback: keep the demo usable without credentials */
-    window.knockAuth.user = { email: "dev@knock.local", name: "Dev mode" };
-    document.documentElement.classList.add("auth-dev");
-    return;
+  if (hasSupabase) {
+    auth.client = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
   }
 
-  const client = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
-  window.knockAuth.mode = "supabase";
-  window.knockAuth.client = client;
-  window.knockAuth.signOut = async () => {
-    await client.auth.signOut();
-    location.reload();
+  auth.signOut = async () => {
+    localStorage.removeItem("knock_dev_session");
+    if (auth.client) await auth.client.auth.signOut();
+    location.href = landingUrl;
   };
 
-  function gate() {
+  function devUser() {
+    const email = localStorage.getItem("knock_dev_session");
+    return email ? { id: "dev", email, name: "Dev", initials: "DV" } : null;
+  }
+
+  function fromSession(session) {
+    const u = session.user;
+    const name = u.user_metadata?.full_name || u.email;
+    return {
+      id: u.id,
+      email: u.email,
+      name,
+      avatar: u.user_metadata?.avatar_url,
+      initials: name.split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((p) => p[0].toUpperCase()).join(""),
+    };
+  }
+
+  auth.ready = (async () => {
+    if (auth.client) {
+      const { data: { session } } = await auth.client.auth.getSession();
+      if (session) auth.user = fromSession(session);
+    }
+    if (!auth.user) auth.user = devUser();
+    return auth.user;
+  })();
+
+  /* ---------- login overlay (shared by landing + app) ---------- */
+  function openLogin() {
     if (document.getElementById("authgate")) return;
     const el = document.createElement("div");
     el.id = "authgate";
     el.innerHTML = `
       <div class="authgate__card">
+        <button class="authgate__x" aria-label="Close">&times;</button>
         <div class="authgate__logo">knock<i>.</i></div>
         <h2>Open some doors.</h2>
         <p>Sign in to build your profile and start knocking.</p>
-        <button class="authbtn" data-provider="google">Continue with Google</button>
-        <button class="authbtn" data-provider="linkedin_oidc">Continue with LinkedIn</button>
+        ${hasSupabase ? `
+        <button class="authbtn" data-provider="google">
+          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="#4285F4" d="M23.5 12.3c0-.9-.1-1.5-.3-2.3H12v4.5h6.5c-.1 1.1-.8 2.7-2.4 3.8l3.7 2.9c2.3-2.1 3.7-5.2 3.7-8.9z"/><path fill="#34A853" d="M12 24c3.2 0 6-1.1 8-2.9l-3.8-2.9c-1 .7-2.4 1.2-4.2 1.2-3.2 0-6-2.2-7-5.2l-3.9 3C3.1 21.2 7.2 24 12 24z"/><path fill="#FBBC05" d="M5 14.2a7.3 7.3 0 0 1 0-4.5L1.1 6.7a12 12 0 0 0 0 10.7L5 14.2z"/><path fill="#EA4335" d="M12 4.7c1.8 0 3 .8 3.7 1.4l2.7-2.7C16.7 1.7 14.2.6 12 .6 7.2.6 3.1 3.4 1.1 7.3l3.9 3c1-3 3.8-5.6 7-5.6z"/></svg>
+          Continue with Google
+        </button>
         <div class="authgate__or"><span>or</span></div>
         <form id="auth-email">
           <input type="email" placeholder="you@school.edu" required />
           <button class="authbtn authbtn--accent" type="submit">Email me a magic link</button>
-        </form>
+        </form>` : `
+        <button class="authbtn authbtn--accent" id="auth-dev">Continue with dev login</button>
+        <p class="authgate__note">Supabase is not configured, so Google sign-in and magic links are off. Add app/config.js (see SETUP.md) to turn them on.</p>`}
         <p class="authgate__note" id="auth-note"></p>
-        <p class="authgate__fine">By continuing you agree to Knock's <a href="../terms.html">Terms</a> and <a href="../privacy.html">Privacy Policy</a>.<br>
-        LinkedIn sign-in verifies your identity only — Knock never scrapes or messages your LinkedIn.</p>
+        <p class="authgate__fine">By continuing you agree to Knock's <a href="${inApp ? "../" : ""}terms.html">Terms</a> and <a href="${inApp ? "../" : ""}privacy.html">Privacy Policy</a>.</p>
       </div>`;
     document.body.appendChild(el);
 
+    el.querySelector(".authgate__x").addEventListener("click", () => el.remove());
+    el.addEventListener("click", (e) => { if (e.target === el) el.remove(); });
+
     el.querySelectorAll("[data-provider]").forEach((btn) =>
       btn.addEventListener("click", async () => {
-        const { error } = await client.auth.signInWithOAuth({
+        const { error } = await auth.client.auth.signInWithOAuth({
           provider: btn.dataset.provider,
-          options: { redirectTo: location.href.split("#")[0] },
+          options: { redirectTo: appUrl },
         });
         if (error) document.getElementById("auth-note").textContent = error.message;
       })
     );
-    el.querySelector("#auth-email").addEventListener("submit", async (e) => {
+    el.querySelector("#auth-email")?.addEventListener("submit", async (e) => {
       e.preventDefault();
       const email = e.target.querySelector("input").value;
-      const { error } = await client.auth.signInWithOtp({
+      const { error } = await auth.client.auth.signInWithOtp({
         email,
-        options: { emailRedirectTo: location.href.split("#")[0] },
+        options: { emailRedirectTo: appUrl },
       });
       document.getElementById("auth-note").textContent = error
         ? error.message
         : `Magic link sent to ${email}. Check your inbox.`;
     });
+    el.querySelector("#auth-dev")?.addEventListener("click", () => {
+      localStorage.setItem("knock_dev_session", "dev@knock.local");
+      location.href = appUrl;
+    });
   }
 
-  client.auth.getSession().then(({ data: { session } }) => {
-    if (session) {
-      window.knockAuth.user = {
-        id: session.user.id,
-        email: session.user.email,
-        name: session.user.user_metadata?.full_name || session.user.email,
-        avatar: session.user.user_metadata?.avatar_url,
-      };
-      document.dispatchEvent(new CustomEvent("knock:auth", { detail: window.knockAuth.user }));
-    } else {
-      gate();
-    }
-  });
-
-  client.auth.onAuthStateChange((event) => {
-    if (event === "SIGNED_IN") document.getElementById("authgate")?.remove();
-  });
+  if (auth.client) {
+    auth.client.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_IN" && session) {
+        auth.user = fromSession(session);
+        document.getElementById("authgate")?.remove();
+        if (!inApp) location.href = appUrl;
+      }
+    });
+  }
 })();

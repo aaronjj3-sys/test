@@ -53,6 +53,23 @@ for (let r = 0; r < 3; r++) {
   giant.append(row);
 }
 
+/* ---------------- auth-gated CTAs ----------------
+   Every "start knocking" button opens the login overlay unless a
+   session already exists, in which case it goes straight to the app. */
+let isAuthed = false;
+window.knockAuth?.ready?.then((u) => { isAuthed = !!u; });
+document.querySelectorAll('a[href="app/index.html"]').forEach((a) => {
+  a.addEventListener("click", (e) => {
+    if (isAuthed) return; /* logged in: continue to the app */
+    e.preventDefault();
+    window.knockAuth?.openLogin();
+  });
+});
+if (location.hash === "#login") {
+  history.replaceState(null, "", location.pathname);
+  window.knockAuth?.ready?.then((u) => { if (!u) window.knockAuth.openLogin(); });
+}
+
 /* ---------------- contact form ---------------- */
 document.getElementById("contact-form")?.addEventListener("submit", (e) => {
   e.preventDefault();
@@ -180,10 +197,12 @@ if (!reduceMotion) {
       gsap.killTweensOf([...frames, ...copies]);
       frames.forEach((f, k) => { if (k !== i && k !== prev) gsap.set(f, { autoAlpha: 0 }); });
       copies.forEach((c, k) => { if (k !== i && k !== prev) gsap.set(c, { autoAlpha: 0, y: 0 }); });
-      /* frames swap with a 3D page-turn feel */
-      gsap.to(frames[prev], { autoAlpha: 0, rotateY: -28 * dir, x: -50 * dir, duration: 0.4, ease: "power2.in", overwrite: true });
-      gsap.fromTo(frames[i], { autoAlpha: 0, rotateY: 32 * dir, x: 70 * dir },
-        { autoAlpha: 1, rotateY: 0, x: 0, duration: 0.5, ease: "power3.out", delay: 0.08, overwrite: true });
+      /* full side flip: the old frame rotates away to 90°, the new one
+         completes the turn in from -90°, like flipping a card over */
+      gsap.set(frames[i], { x: 0 });
+      gsap.to(frames[prev], { rotateY: 90 * dir, autoAlpha: 0, duration: 0.3, ease: "power2.in", overwrite: true });
+      gsap.fromTo(frames[i], { rotateY: -90 * dir, autoAlpha: 0 },
+        { rotateY: 0, autoAlpha: 1, duration: 0.45, ease: "power3.out", delay: 0.27, overwrite: true });
       /* copy crossfade */
       gsap.to(copies[prev], { autoAlpha: 0, y: -18 * dir, duration: 0.28, ease: "power2.in", overwrite: true });
       gsap.fromTo(copies[i], { autoAlpha: 0, y: 26 * dir }, { autoAlpha: 1, y: 0, duration: 0.45, ease: "power3.out", delay: 0.08, overwrite: true });
@@ -247,34 +266,68 @@ if (!reduceMotion) {
   strip.addEventListener("click", kickflip);
   strip.addEventListener("mouseenter", kickflip);
 
-  /* ---------------- voyager: a paper plane rides the whole page ---------------- */
+  /* ---------------- voyager: a paper plane glides with you down the page ----------------
+     Not scrubbed 1:1. The scroll position picks a target along the route and the
+     plane eases toward it every frame, so fast scrolling never makes it dart:
+     it lags behind, catches up, and banks left/right with its actual heading. */
   if (!showcaseMobile) {
     const voyager = document.createElement("div");
     voyager.id = "voyager";
     voyager.setAttribute("aria-hidden", "true");
     voyager.innerHTML = `<svg viewBox="0 0 40 34"><path d="M2 4 L36 12 L10 20 L14 30 Z" fill="#fff" stroke="#1b2a38" stroke-width="2.5" stroke-linejoin="round"/></svg>`;
     document.body.appendChild(voyager);
-    gsap.set(voyager, { xPercent: -50, yPercent: -50, left: "4vw", top: "70vh", autoAlpha: 0 });
+    gsap.set(voyager, { xPercent: -50, yPercent: -50, force3D: true });
 
-    /* waypoints in viewport coords; the timeline is scrubbed across the full page scroll */
-    const LEGS = [
-      { left: "8vw",  top: "72vh", rotation: -8,  autoAlpha: 0 },   // hold while the hero plane flies
-      { left: "12vw", top: "66vh", rotation: -12, autoAlpha: 1 },   // picks up after the hero
-      { left: "88vw", top: "26vh", rotation: -20 },                 // climbs across the stats strip
-      { left: "10vw", top: "58vh", rotation: 16 },                  // banks back over the product tour
-      { left: "90vw", top: "70vh", rotation: -4 },                  // glides through how-it-works
-      { left: "12vw", top: "24vh", rotation: -24 },                 // loops up past the wins
-      { left: "86vw", top: "48vh", rotation: 8 },                   // crosses pricing
-      { left: "50vw", top: "62vh", rotation: 2 },                   // lines up on the CTA
-      { left: "50vw", top: "86vh", rotation: 12, autoAlpha: 0 },    // lands and fades before the footer
+    /* route waypoints in [vw, vh]; loops left → right → left down the page */
+    const ROUTE = [
+      [10, 74], [12, 66],  // holds near the hero while its own plane flies
+      [88, 26],            // climbs across the stats strip
+      [10, 58],            // banks back over the product tour
+      [90, 70],            // glides through how-it-works
+      [12, 24],            // loops up past the wins
+      [86, 48],            // crosses pricing
+      [50, 62], [50, 84],  // lines up on the CTA and descends
     ];
-    const vtl = gsap.timeline({
-      defaults: { ease: "sine.inOut" },
-      scrollTrigger: { trigger: document.body, start: "top top", end: "bottom bottom", scrub: 1.6 },
+    const routeAt = (p) => {
+      const f = Math.min(0.9999, Math.max(0, p)) * (ROUTE.length - 1);
+      const i = Math.floor(f), t = f - i;
+      const [x1, y1] = ROUTE[i], [x2, y2] = ROUTE[i + 1];
+      return [x1 + (x2 - x1) * t, y1 + (y2 - y1) * t];
+    };
+
+    let cur = null, alpha = 0, pitch = 0, facing = 1;
+    gsap.ticker.add(() => {
+      const max = document.documentElement.scrollHeight - window.innerHeight;
+      const p = max > 0 ? window.scrollY / max : 0;
+      const [tx, ty] = routeAt(p);
+      if (!cur) cur = [tx, ty];
+
+      /* low-pass follow: the plane drifts toward the target instead of jumping */
+      const k = 0.045;
+      const dx = (tx - cur[0]) * k;
+      const dy = (ty - cur[1]) * k;
+      cur[0] += dx; cur[1] += dy;
+
+      /* heading: mirror when flying right-to-left, pitch with the climb/dive */
+      if (Math.abs(dx) > 0.004) facing = dx < 0 ? -1 : 1;
+      const speed = Math.hypot(dx, dy);
+      const targetPitch = speed > 0.002
+        ? Math.max(-38, Math.min(38, (Math.atan2(dy * (window.innerHeight / window.innerWidth), Math.abs(dx)) * 180) / Math.PI))
+        : 0;
+      pitch += (targetPitch - pitch) * 0.08;
+
+      /* hidden over the hero (it has its own plane) and before the footer */
+      const targetAlpha = p > 0.06 && p < 0.95 ? 1 : 0;
+      alpha += (targetAlpha - alpha) * 0.06;
+
+      gsap.set(voyager, {
+        left: cur[0] + "vw", top: cur[1] + "vh",
+        rotation: pitch, scaleX: facing,
+        autoAlpha: Math.round(alpha * 100) / 100,
+      });
     });
-    LEGS.forEach((leg, k) => vtl.to(voyager, { ...leg, duration: k === 0 ? 0.6 : 1 }));
-    /* gentle idle bob on top of the flight path */
-    gsap.to("#voyager svg", { y: -9, rotation: 4, transformOrigin: "50% 50%", duration: 1.4, yoyo: true, repeat: -1, ease: "sine.inOut" });
+    /* gentle idle bob on top of the flight */
+    gsap.to("#voyager svg", { y: -8, duration: 1.4, yoyo: true, repeat: -1, ease: "sine.inOut" });
   }
 
   /* ---------------- footer wordmark ripple ---------------- */

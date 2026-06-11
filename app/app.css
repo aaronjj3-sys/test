@@ -331,6 +331,8 @@ tbody tr:hover { background: var(--accent-soft); }
 
 /* ============ profile ============ */
 .profile-grid { display: grid; grid-template-columns: 340px 1fr; gap: 1.2rem; align-items: start; }
+.profile-col { display: flex; flex-direction: column; gap: 1.2rem; }
+.profile-col .pcard + .pcard { margin-top: 0; }
 @media (max-width: 1100px) { .profile-grid { grid-template-columns: 1fr; } }
 .pcard {
   background: var(--card); border: 1.5px solid var(--border); border-radius: var(--r);
@@ -360,6 +362,7 @@ tbody tr:hover { background: var(--accent-soft); }
 /* ============ settings ============ */
 .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 1.2rem; align-items: start; }
 .setrow { display: flex; align-items: center; gap: 0.9rem; padding: 0.8rem 0; border-bottom: 1px solid var(--line); }
+.setrow > div:not(.end) { flex: 1; min-width: 0; }
 .setrow:last-child { border-bottom: none; }
 .setrow .ico { width: 38px; height: 38px; border-radius: 12px; background: var(--panel); border: 1.5px solid var(--border); display: grid; place-items: center; font-size: 1rem; flex: none; }
 .setrow strong { font-size: 0.86rem; display: block; font-weight: 800; }
@@ -649,33 +652,80 @@ tbody tr:hover { background: var(--accent-soft); }
 .vh .badge { vertical-align: middle; margin-left: 0.4rem; }
 .vh a { color: var(--accent-deep); font-weight: 700; }
 
-/* ============ auth gate ============ */
-#authgate {
-  position: fixed; inset: 0; z-index: 200; display: grid; place-items: center;
-  background: rgba(27, 42, 56, 0.55); backdrop-filter: blur(6px);
+/* ============ v4: fresh-account base, account menu, pager, onboarding ============ */
+
+/* account menu (top right) */
+.acct { position: relative; }
+.acct .topbar__avatar { cursor: pointer; padding: 0; }
+.acct .topbar__avatar:hover { transform: translate(-1px, -1px); box-shadow: 3px 3px 0 var(--border); }
+.acct__menu {
+  position: absolute; right: 0; top: calc(100% + 10px); min-width: 220px; z-index: 80;
+  background: var(--card); border: 2px solid var(--border); border-radius: 16px;
+  box-shadow: var(--pop-lg); padding: 0.5rem; animation: pop 0.18s ease;
 }
-.authgate__card {
-  width: min(400px, 92vw); background: #fff; border: 2px solid var(--border);
-  border-radius: 26px; box-shadow: 6px 6px 0 var(--border); padding: 2.2rem 2rem; text-align: center;
+.acct__who { padding: 0.6rem 0.7rem 0.7rem; border-bottom: 1.5px solid var(--line); margin-bottom: 0.35rem; }
+.acct__who strong { display: block; font-size: 0.86rem; font-weight: 800; }
+.acct__who small { color: var(--ink-faint); font-size: 0.72rem; font-weight: 600; word-break: break-all; }
+.acct__menu a, .acct__menu button {
+  display: block; width: 100%; text-align: left; padding: 0.5rem 0.7rem; border-radius: 10px;
+  font-size: 0.82rem; font-weight: 700; color: var(--ink); text-decoration: none;
+  background: none; border: none;
 }
-.authgate__logo { font-size: 1.5rem; font-weight: 900; letter-spacing: -0.04em; }
-.authgate__logo i { color: var(--accent); font-style: normal; }
-.authgate__card h2 { font-size: 1.3rem; margin-top: 0.8rem; }
-.authgate__card > p { color: var(--ink-soft); font-size: 0.88rem; margin: 0.4rem 0 1.4rem; }
-.authbtn {
-  display: block; width: 100%; margin-bottom: 0.6rem; padding: 0.7rem 1rem;
-  font: 700 0.9rem var(--sans); color: var(--ink); background: #fff;
-  border: 2px solid var(--border); border-radius: 999px; cursor: pointer;
-  transition: transform 0.15s, box-shadow 0.15s;
+.acct__menu a:hover, .acct__menu button:hover { background: var(--accent-soft); }
+.acct__menu button#acct-logout { color: #c2502e; }
+
+/* pager */
+.pager { display: flex; align-items: center; gap: 0.45rem; margin-top: 1.1rem; flex-wrap: wrap; }
+.pager__hint { font: 600 0.74rem var(--mono); color: var(--ink-faint); margin-right: auto; }
+.pager__num {
+  width: 32px; height: 32px; border-radius: 10px; border: 1.5px solid var(--border);
+  background: var(--card); font: 700 0.78rem var(--sans); color: var(--ink-soft);
+  transition: all 0.15s;
 }
-.authbtn:hover { transform: translate(-2px, -2px); box-shadow: 3px 3px 0 var(--border); }
-.authbtn--accent { background: var(--accent); color: #fff; }
-.authgate__or { display: flex; align-items: center; gap: 0.8rem; margin: 1rem 0; color: var(--ink-faint); font-size: 0.75rem; font-weight: 700; }
-.authgate__or::before, .authgate__or::after { content: ""; flex: 1; height: 2px; background: var(--line); }
-#auth-email input {
-  width: 100%; margin-bottom: 0.6rem; padding: 0.7rem 1rem;
-  font: 600 0.9rem var(--sans); border: 2px solid var(--border); border-radius: 999px; outline: none;
+.pager__num:hover { transform: translate(-1px, -1px); box-shadow: 2px 2px 0 var(--border); }
+.pager__num.is-on { background: var(--accent); color: #fff; box-shadow: 2px 2px 0 var(--border); }
+
+/* onboarding upgrades */
+.modal input[type="email"] {
+  width: 100%; border: 1.5px solid var(--border); border-radius: 14px; background: var(--card);
+  padding: 0.7rem 0.9rem; font-size: 0.85rem; font-weight: 500; outline: none;
 }
-.authgate__note { font-size: 0.8rem; font-weight: 700; color: var(--accent-deep); min-height: 1em; margin-top: 0.4rem; }
-.authgate__fine { font-size: 0.68rem; color: var(--ink-faint); margin-top: 1rem; line-height: 1.5; }
-.authgate__fine a { color: var(--accent-deep); }
+.dropzone--lg { padding: 2.2rem 1.6rem; font-size: 0.9rem; }
+.dropzone.is-drag { border-style: solid; background: var(--accent-soft); box-shadow: var(--pop); transform: scale(1.01); }
+.dropzone small { display: block; margin-top: 0.3rem; font-size: 0.72rem; color: var(--ink-faint); font-weight: 500; }
+.ob-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
+@media (max-width: 560px) { .ob-cols { grid-template-columns: 1fr; } }
+.ob-error {
+  color: #c2502e; font-size: 0.78rem; font-weight: 700; margin-top: 0.45rem;
+  display: flex; align-items: center; gap: 0.35rem;
+}
+.ob-error::before { content: "!"; display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none; border-radius: 50%; background: #c2502e; color: #fff; font-size: 0.66rem; font-weight: 900; }
+.shake { animation: obshake 0.4s ease; }
+@keyframes obshake {
+  20% { transform: translateX(-6px); } 40% { transform: translateX(5px); }
+  60% { transform: translateX(-3px); } 80% { transform: translateX(2px); }
+}
+.chips-select--stack { flex-direction: column; align-items: stretch; }
+.chips-select--stack .pill { justify-content: flex-start; padding: 0.5rem 0.85rem; white-space: normal; text-align: left; }
+.pill--more { background: var(--panel); border-style: dashed; color: var(--accent-deep); }
+
+/* profile editing */
+.idcard .btn { margin: 0.4rem 0 0.9rem; }
+.voicebox { position: relative; }
+.voicebox .edit { position: absolute; right: 0.8rem; top: 0.7rem; font-size: 0.7rem; font-weight: 700; color: var(--ink-faint); background: none; border: none; }
+.voicebox .edit:hover { color: var(--accent-deep); }
+.xp__actions { display: flex; gap: 0.7rem; margin-top: 0.3rem; }
+.xp__actions .edit { font-size: 0.7rem; font-weight: 700; color: var(--ink-faint); background: none; border: none; padding: 0; }
+.xp__actions .edit:hover { color: var(--accent-deep); }
+.empty-line { color: var(--ink-faint); font-size: 0.82rem; font-weight: 500; }
+.skills span { display: inline-flex; align-items: center; gap: 0.3rem; }
+.chip-x { background: none; border: none; color: var(--ink-faint); font-size: 0.85rem; line-height: 1; padding: 0; }
+.chip-x:hover { color: #c2502e; }
+#skill-add {
+  border: 1.5px dashed var(--border); border-radius: 99px; padding: 0.28rem 0.7rem;
+  font-size: 0.74rem; font-weight: 600; background: var(--bg); outline: none; width: 110px;
+}
+.pcard textarea {
+  width: 100%; border: 1.5px solid var(--border); border-radius: 14px; background: var(--bg);
+  padding: 0.7rem 0.9rem; font-size: 0.85rem; font-weight: 500; outline: none; resize: vertical;
+}

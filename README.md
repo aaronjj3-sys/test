@@ -56,7 +56,7 @@ type, thick ink borders with offset "pop" shadows, hover pop-outs everywhere.
 No build step. Libraries are vendored (`vendor/`).
 
 ```bash
-node server.js     # serves the site AND the /api routes (Apollo sourcing etc.)
+npm run dev        # serves the site AND the /api routes (Apollo sourcing etc.)
 # landing:  http://localhost:8000
 # app:      http://localhost:8000/app/
 npm test           # sourcing/scoring checks
@@ -78,17 +78,20 @@ full go-live checklist (Supabase auth, Google/LinkedIn login, Gmail, Stripe).
 - **API routes** (`api/`): `test-apollo`, `sourcing/apollo`, `sourcing/mock`,
   `dashboard/doors`, `campaigns/create` — Vercel-compatible handlers, served
   locally by `server.js`
-- **Auth** (`app/auth.js`): Supabase login gate (Google, LinkedIn OIDC, email
-  magic link) when `app/config.js` exists; dev mode otherwise
-- **Onboarding**: paste resume → deterministic win/school extraction → target
-  path / people / location / tone chips → saved profile powers sourcing
+- **Auth** (`app/auth.js`): the landing page gates every CTA behind a login
+  overlay (Google OAuth or email magic link via Supabase when `app/config.js`
+  exists; a labeled dev login otherwise). The app redirects signed-out
+  visitors back to the landing page
+- **Onboarding**: resume drag-and-drop → about you → target paths → people +
+  locations → voice + personality. The saved profile powers sourcing, which
+  runs automatically and paginates 100 doors, 25 per page
 - **Supabase schema**: `supabase/migrations/001_init.sql` (profiles, doors,
   campaigns, messages, oauth connections — all with RLS)
 
 ## Files
 
 - `index.html` / `styles.css` / `main.js`, landing page (+ `privacy.html`, `terms.html`)
-- `app/`, the dashboard MVP (`index.html`, `app.css`, `app.js`, `data.js`, `auth.js`)
+- `app/`, the dashboard SPA (`index.html`, `app.css`, `app.js`, `auth.js`)
 - `api/` + `lib/` + `server.js`, the backend (Apollo sourcing, campaigns, mock mode)
 - `supabase/migrations/`, database schema with RLS
 - `assets/`, app UI screenshots + `assets/logos/` brand SVGs for the marquee

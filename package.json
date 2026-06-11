@@ -4,20 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "dev:static": "node server.js",
+    "dev": "node server.js",
+    "start": "node server.js",
     "test": "node test/sourcing.test.js"
-  },
-  "dependencies": {
-    "next": "14.0.0",
-    "react": "18.2.0",
-    "react-dom": "18.2.0"
-  },
-  "devDependencies": {
-    "@types/node": "25.9.3",
-    "@types/react": "19.2.17",
-    "typescript": "6.0.3"
   }
 }
