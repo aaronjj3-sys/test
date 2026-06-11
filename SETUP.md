@@ -6,11 +6,16 @@ credentials/accounts that only you can create. Work top to bottom.
 ## 0. Run it locally (works right now, no keys needed)
 
 ```bash
-node server.js
+node server.js     # serves the static site AND all /api routes on :8000
 # landing: http://localhost:8000
 # app:     http://localhost:8000/app/
-npm test   # sourcing/scoring unit checks
+npm test           # sourcing/scoring unit checks
 ```
+
+If you prefer your Next.js setup (`npm run dev`), the same engine is exposed
+through Next route handlers (`app/api/**/route.js`) — but `next dev` serves
+only the API, not the static landing/app pages, so `node server.js` is the
+one-command way to run everything together.
 
 Without keys the app runs in **mock mode**: sourcing returns demo doors
 (clearly labeled), auth runs in dev mode. Every flow is testable.
