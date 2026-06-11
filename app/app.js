@@ -1,5 +1,5 @@
 /* ============================================================
-   Knock app — SPA logic
+   Knock app, SPA logic
    Views: dashboard · find people · inbox · tracker · profile · settings
    Agent drawer simulates a TechCenter/Tsenta-style background agent:
    research → hook → draft-in-your-voice → approve & send → live replies.
@@ -145,7 +145,7 @@ function renderDashboard() {
             <td><div class="cell-who">${av(c, 32)}<div><strong>${c.name}</strong><small>${c.role} · ${c.company}</small></div></div></td>
             <td class="cell-mono">${askEmoji[c.type]} ${askLabel[c.type]}</td>
             <td><span class="status status--${o.stage}">${st.label}</span></td>
-            <td class="cell-mono">${o.opens || "—"}</td>
+            <td class="cell-mono">${o.opens || "·"}</td>
             <td><div class="cell-mono">${o.lastTouch}</div>${o.note ? `<div class="cell-note">${o.note}</div>` : ""}</td>
             <td class="cell-mono">→</td>
           </tr>`; }).join("")}
@@ -160,13 +160,13 @@ function renderDashboard() {
       const card = e.target.closest(".match-card");
       state.passed.add(card.dataset.id);
       card.style.cssText += "transition:.3s;opacity:0;transform:translateX(-16px) rotate(-2deg)";
-      toast("Passed — Scout recalibrates your matches");
+      toast("Passed, Scout recalibrates your matches");
       setTimeout(renderDashboard, 320);
     }));
   $("#knock-all", view)?.addEventListener("click", () => {
     if (!matches.length) return;
     matches.slice(1).forEach((c) => state.outreach.unshift({ contactId: c.id, stage: "drafted", lastTouch: "just now", opens: 0, note: "Draft ready for review" }));
-    toast(`✦ Scout is drafting ${matches.length} knocks — first one ready now`);
+    toast(`✦ Scout is drafting ${matches.length} knocks, first one ready now`);
     openAgent(matches[0]);
   });
   $$("tbody tr", view).forEach((tr) =>
@@ -191,7 +191,7 @@ function renderPeople() {
   view.innerHTML = `<div class="viewwrap">
     <div class="vh">
       <h1>Find people, <em>not postings.</em></h1>
-      <p>Scout watches the YC directory, your alumni network, PE/VC rosters, and live hiring signals — and ranks who will actually answer you.</p>
+      <p>Scout watches the YC directory, your alumni network, PE/VC rosters, and live hiring signals, and ranks who will actually answer you.</p>
     </div>
     <div class="filters">
       ${SOURCES.map((s) => `<button class="pill ${source === s.id ? "is-on" : ""}" data-k="source" data-v="${s.id}">${s.label}</button>`).join("")}
@@ -214,7 +214,7 @@ function renderPeople() {
             <button class="btn btn--sm act-knock">✦ Draft knock</button>
           </div>
         </div>`).join("")}
-      ${list.length === 0 ? `<div class="empty">No one matches those filters — Scout is sourcing more doors tonight.</div>` : ""}
+      ${list.length === 0 ? `<div class="empty">No one matches those filters, Scout is sourcing more doors tonight.</div>` : ""}
     </div>
   </div>`;
 
@@ -228,7 +228,7 @@ function renderPeople() {
       state.passed.add(card.dataset.id);
       card.style.cssText += "transition:.3s;opacity:0;transform:scale(.96)";
       setTimeout(() => card.remove(), 300);
-      toast("Passed — fewer of these next time");
+      toast("Passed, fewer of these next time");
     }));
 }
 
@@ -242,7 +242,7 @@ function renderInbox() {
   if (t && t.unread) { t.unread = false; }
 
   view.innerHTML = `<div class="viewwrap">
-    <div class="vh"><h1>Inbox — <em>warm threads first.</em></h1>
+    <div class="vh"><h1>Inbox, <em>warm threads first.</em></h1>
     <p>Scout tracks every reply and flags the doors that are opening.</p></div>
     <div class="inbox">
       <div class="threadlist">
@@ -252,7 +252,7 @@ function renderInbox() {
               ${th.warm ? '<span class="warmtag">🔥 WARM</span>' : ""}<time>${th.when}</time></div>
             <span class="subj">${th.subject}</span>
           </div>`; }).join("")}
-        ${state.threads.length === 0 ? '<div class="empty">No threads yet — knock on a door first.</div>' : ""}
+        ${state.threads.length === 0 ? '<div class="empty">No threads yet, knock on a door first.</div>' : ""}
       </div>
       <div class="threadview">
         ${t ? `
@@ -262,7 +262,7 @@ function renderInbox() {
             ${t.messages.map((m) => `<div class="msg msg--${m.from === "you" ? "you" : "them"}"><time>${m.time}</time>${m.text}</div>`).join("")}
           </div>
           <div class="threadview__reply">
-            <input id="reply-input" type="text" placeholder="Reply — or let Scout draft it…" />
+            <input id="reply-input" type="text" placeholder="Reply, or let Scout draft it…" />
             <button class="btn btn--paper btn--sm" id="scout-draft">✦ Scout draft</button>
             <button class="btn btn--sm" id="send-reply">Send</button>
           </div>` : '<div class="empty">Select a thread.</div>'}
@@ -280,9 +280,9 @@ function renderInbox() {
     const c = contact(t.contactId);
     $("#reply-input", view).value =
       t.warm
-        ? `Booked a slot for Thursday — thank you, ${c.name.split(" ")[0]}! Sending the ${c.type === "case" ? "deck" : "case study"} ahead so we can skip straight to questions.`
-        : `Just floating this back up, ${c.name.split(" ")[0]} — still very keen for 15 minutes whenever works.`;
-    toast("✦ Drafted in your voice — edit freely");
+        ? `Booked a slot for Thursday, thank you, ${c.name.split(" ")[0]}! Sending the ${c.type === "case" ? "deck" : "case study"} ahead so we can skip straight to questions.`
+        : `Just floating this back up, ${c.name.split(" ")[0]}, still very keen for 15 minutes whenever works.`;
+    toast("✦ Drafted in your voice, edit freely");
   });
   $("#send-reply", view)?.addEventListener("click", () => {
     const input = $("#reply-input", view);
@@ -290,7 +290,7 @@ function renderInbox() {
     t.messages.push({ from: "you", time: "Just now", text: input.value.trim() });
     input.value = "";
     renderInbox();
-    toast("Sent ✓ — Scout will watch for the reply");
+    toast("Sent ✓, Scout will watch for the reply");
   });
 }
 
@@ -300,7 +300,7 @@ function renderInbox() {
 function renderTracker() {
   view.innerHTML = `<div class="viewwrap">
     <div class="vh"><h1>Every door, <em>one board.</em></h1>
-    <p>Drag cards as things move — Scout updates follow-ups to match.</p></div>
+    <p>Drag cards as things move, Scout updates follow-ups to match.</p></div>
     <div class="board">
       ${STAGES.map((s) => { const items = state.outreach.filter((o) => o.stage === s.id); return `
         <div class="col" data-stage="${s.id}">
@@ -330,7 +330,7 @@ function renderTracker() {
       const o = state.outreach.find((x) => x.contactId === dragId);
       if (o && o.stage !== col.dataset.stage) {
         o.stage = col.dataset.stage; o.lastTouch = "just now";
-        if (o.stage === "meeting") { state.stats.meetings++; toast("🎉 Meeting booked — Scout sent you a prep brief"); }
+        if (o.stage === "meeting") { state.stats.meetings++; toast("🎉 Meeting booked, Scout sent you a prep brief"); }
         renderTracker();
       }
     });
@@ -343,7 +343,7 @@ function renderTracker() {
 function renderProfile() {
   view.innerHTML = `<div class="viewwrap">
     <div class="vh"><h1>This is who Scout <em>sounds like.</em></h1>
-    <p>Everything below was pulled from your resume + questionnaire. Edit anything — every future draft updates instantly.</p></div>
+    <p>Everything below was pulled from your resume + questionnaire. Edit anything, every future draft updates instantly.</p></div>
     <div class="profile-grid">
       <div>
         <div class="pcard idcard">
@@ -352,7 +352,7 @@ function renderProfile() {
           <div class="sub">${PROFILE.school}<br>${PROFILE.degree} · Class of ${PROFILE.gradYear}</div>
           <div class="traits">${PROFILE.traits.map((t) => `<span class="trait">${t}</span>`).join("")}</div>
           <div class="voicebox">
-            <b>Writing voice</b> — tone: <b>${PROFILE.voice.tone}</b> · length: <b>${PROFILE.voice.length}</b> · sign-off: <b>${PROFILE.voice.signoff}</b>
+            <b>Writing voice</b>, tone: <b>${PROFILE.voice.tone}</b> · length: <b>${PROFILE.voice.length}</b> · sign-off: <b>${PROFILE.voice.signoff}</b>
           </div>
         </div>
         <div class="pcard">
@@ -386,15 +386,15 @@ function renderProfile() {
   $('[data-edit="story"]', view)?.addEventListener("click", () => {
     const el = $("#story-text", view);
     el.contentEditable = true; el.focus();
-    toast("Editing — click anywhere outside to save");
+    toast("Editing, click anywhere outside to save");
     el.addEventListener("blur", () => {
       el.contentEditable = false;
       PROFILE.story = el.textContent.replace(/[“”]/g, "");
-      toast("Saved — Scout's drafts now use the new story ✓");
+      toast("Saved, Scout's drafts now use the new story ✓");
     }, { once: true });
   });
   $("#re-upload", view)?.addEventListener("click", () =>
-    toast("📄 Drop a new PDF anytime — parsing takes ~20 seconds"));
+    toast("📄 Drop a new PDF anytime, parsing takes ~20 seconds"));
 }
 
 /* ============================================================
@@ -410,7 +410,7 @@ function renderSettings() {
           <label class="switch end"><input type="checkbox" data-k="review" ${state.autonomy.review ? "checked" : ""}><i></i></label></div>
         <div class="setrow"><span class="ico">⏱</span><div><strong>Follow-up autopilot</strong><small>Up to 2 polite nudges, timed to their reading hours</small></div>
           <label class="switch end"><input type="checkbox" data-k="followups" ${state.autonomy.followups ? "checked" : ""}><i></i></label></div>
-        <div class="setrow"><span class="ico">🌙</span><div><strong>Weekend sends</strong><small>Off — replies are 40% lower on weekends</small></div>
+        <div class="setrow"><span class="ico">🌙</span><div><strong>Weekend sends</strong><small>Off, replies are 40% lower on weekends</small></div>
           <label class="switch end"><input type="checkbox" data-k="weekends" ${state.autonomy.weekends ? "checked" : ""}><i></i></label></div>
       </div>
       <div class="pcard">
@@ -424,7 +424,7 @@ function renderSettings() {
       </div>
       <div class="pcard">
         <h3>Plan & billing</h3>
-        <div class="setrow"><span class="ico">🎓</span><div><strong>Student — Free</strong><small>${state.knocks} of 15 knocks left this month</small></div>
+        <div class="setrow"><span class="ico">🎓</span><div><strong>Student, Free</strong><small>${state.knocks} of 15 knocks left this month</small></div>
           <button class="btn btn--sm end" id="set-upgrade">⚡ Go Pro</button></div>
         <div class="setrow"><span class="ico">🔔</span><div><strong>Daily digest</strong><small>One email: new matches + warm threads</small></div>
           <label class="switch end"><input type="checkbox" checked><i></i></label></div>
@@ -444,7 +444,7 @@ function renderSettings() {
 }
 
 /* ============================================================
-   AGENT DRAWER — the wow moment
+   AGENT DRAWER, the wow moment
    ============================================================ */
 const drawer = $("#drawer"), scrim = $("#drawer-scrim");
 
@@ -496,7 +496,7 @@ function showDraft(c) {
       <h4>If no reply, Scout will…</h4>
       <ul>
         <li><b>Day 3</b> Nudge with one new proof point (the $70K save)</li>
-        <li><b>Day 7</b> Final, shorter note — different angle: ${c.why[2] || c.why[0]}</li>
+        <li><b>Day 7</b> Final, shorter note, different angle: ${c.why[2] || c.why[0]}</li>
         <li><b>Then</b> Stop. Never pesters. Flags the next-best door instead.</li>
       </ul>
     </div>
@@ -516,7 +516,7 @@ function showDraft(c) {
   $("#d-edit").addEventListener("click", () => {
     const el = $("#d-body");
     el.contentEditable = true; el.focus();
-    toast("Every word is yours — edit away");
+    toast("Every word is yours, edit away");
   });
   $("#d-regen").addEventListener("click", () => { toast("↻ Rewriting with a different hook…"); openAgent(c); });
   $("#d-send").addEventListener("click", () => sendKnock(c));
@@ -534,7 +534,7 @@ function sendKnock(c) {
     <div class="sentstamp">
       <div class="big">📨</div>
       <h3>Knock delivered.</h3>
-      <p>Scout is watching ${c.name.split(" ")[0]}'s inbox — you'll hear the moment it opens.</p>
+      <p>Scout is watching ${c.name.split(" ")[0]}'s inbox, you'll hear the moment it opens.</p>
     </div>
     <div class="drawer__actions">
       <a class="btn btn--ghost" href="#tracker" id="d-track">View in tracker</a>
@@ -542,7 +542,7 @@ function sendKnock(c) {
     </div>`;
   $("#d-track").addEventListener("click", closeDrawer);
   $("#d-next").addEventListener("click", closeDrawer);
-  toast(`📨 Sent to <b>${c.name}</b> — ${state.knocks} knocks left`);
+  toast(`📨 Sent to <b>${c.name}</b>, ${state.knocks} knocks left`);
 
   /* simulated life: open → reply → warm thread */
   setTimeout(() => {
@@ -565,7 +565,7 @@ function sendKnock(c) {
       ],
     });
     updateChrome();
-    toast(`🔥 <b>${c.name}</b> replied — warm thread in your inbox`, 5000);
+    toast(`🔥 <b>${c.name}</b> replied, warm thread in your inbox`, 5000);
     navigate();
   }, 19000);
 }
@@ -580,7 +580,7 @@ function typeInto(el, text, speed, done) {
 }
 
 /* ============================================================
-   MODALS — onboarding · feedback · upgrade
+   MODALS, onboarding · feedback · upgrade
    ============================================================ */
 const modalScrim = $("#modal-scrim"), modal = $("#modal");
 function openModal(html) { modal.innerHTML = html; modalScrim.hidden = false; }
@@ -602,7 +602,7 @@ function openFeedback() {
     </div>`);
   $$(".pill", modal).forEach((p) => p.addEventListener("click", () => { $$(".pill", modal).forEach((x) => x.classList.remove("is-on")); p.classList.add("is-on"); }));
   $("#m-cancel").addEventListener("click", closeModal);
-  $("#m-send").addEventListener("click", () => { closeModal(); toast("💌 Got it — thank you. We read every one."); });
+  $("#m-send").addEventListener("click", () => { closeModal(); toast("💌 Got it, thank you. We read every one."); });
 }
 $("#feedback-btn").addEventListener("click", openFeedback);
 
@@ -619,7 +619,7 @@ function openUpgrade() {
       <button class="btn btn--accent" id="m-go">Go Pro →</button>
     </div>`);
   $("#m-cancel").addEventListener("click", closeModal);
-  $("#m-go").addEventListener("click", () => { closeModal(); toast("⚡ This is the MVP — payments land next sprint"); });
+  $("#m-go").addEventListener("click", () => { closeModal(); toast("⚡ This is the MVP, payments land next sprint"); });
 }
 $("#upgrade-btn").addEventListener("click", openUpgrade);
 
@@ -628,9 +628,9 @@ function openOnboarding(step = 1) {
   const bars = (n) => `<div class="obsteps">${[1, 2, 3].map((i) => `<i class="${i <= n ? "on" : ""}"></i>`).join("")}</div>`;
   if (step === 1) {
     openModal(`${bars(1)}
-      <h2>First — who are you?</h2>
+      <h2>First, who are you?</h2>
       <p class="sub">Drop a resume, or just talk. Scout reads everything once and never asks again.</p>
-      <div class="dropzone" id="ob-drop">📄 Drop your resume here<br><small>PDF, DOCX — or skip it</small></div>
+      <div class="dropzone" id="ob-drop">📄 Drop your resume here<br><small>PDF, DOCX, or skip it</small></div>
       <label>Or describe yourself in a sentence or two</label>
       <textarea rows="3" placeholder="e.g. Built a $400K e-commerce business in high school. Strategy student. I outwork everyone.">${PROFILE.story}</textarea>
       <div class="modal__actions"><button class="btn" id="ob-next">Continue →</button></div>`);
@@ -639,13 +639,13 @@ function openOnboarding(step = 1) {
   } else if (step === 2) {
     openModal(`${bars(2)}
       <h2>What are you <em style="color:var(--accent);font-style:italic">actually</em> like?</h2>
-      <p class="sub">Pick what's true. This is how Scout sounds like you — not like AI.</p>
+      <p class="sub">Pick what's true. This is how Scout sounds like you, not like AI.</p>
       <div class="chips-select">
         ${["Allergic to average", "Will do whatever it takes", "Ships fast", "First-gen hustle", "Quietly relentless", "Big swing energy", "Detail obsessed", "Cold-email native"].map((t, i) => `<button class="pill ${i < 3 ? "is-on" : ""}">${t}</button>`).join("")}
       </div>
       <label>What do you want doors opened to?</label>
       <div class="chips-select">
-        ${["💼 Jobs & internships", "☕ Coffee chats", "🏆 Case comp sponsors", "🚀 Anything — surprise me"].map((t, i) => `<button class="pill ${i === 0 ? "is-on" : ""}">${t}</button>`).join("")}
+        ${["💼 Jobs & internships", "☕ Coffee chats", "🏆 Case comp sponsors", "🚀 Anything, surprise me"].map((t, i) => `<button class="pill ${i === 0 ? "is-on" : ""}">${t}</button>`).join("")}
       </div>
       <div class="modal__actions"><button class="btn" id="ob-next">Continue →</button></div>`);
     $$(".pill", modal).forEach((p) => p.addEventListener("click", () => p.classList.toggle("is-on")));
@@ -663,7 +663,7 @@ function openOnboarding(step = 1) {
     $("#ob-done").addEventListener("click", () => {
       localStorage.setItem("knock_onboarded", "1");
       closeModal();
-      toast("✦ Welcome to Knock — your first 5 doors are ready");
+      toast("✦ Welcome to Knock, your first 5 doors are ready");
     });
   }
 }

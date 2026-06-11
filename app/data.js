@@ -1,20 +1,20 @@
-/* ============ Knock app — mock data layer ============ */
+/* ============ Knock app, mock data layer ============ */
 
 const PROFILE = {
   name: "Aaron Johnson",
   initials: "AJ",
-  school: "UC Irvine — Paul Merage School of Business",
+  school: "UC Irvine, Paul Merage School of Business",
   degree: "B.A. Business Administration, Finance & Information Systems",
   gradYear: 2027,
   location: "San Diego, CA",
   email: "aaron@uci.edu",
   headline: "Strategy & ops student who ships before being asked to.",
   traits: ["Allergic to average", "Will do whatever it takes", "Ships fast", "Cold-email native"],
-  voice: { tone: "Direct & warm", length: "Under 120 words", signoff: "— Aaron" },
+  voice: { tone: "Direct & warm", length: "Under 120 words", signoff: "- Aaron" },
   skills: ["Excel", "SQL", "Python", "Tableau", "Power BI", "PowerPoint", "Airtable", "Figma basics", "PitchBook"],
   experience: [
     {
-      org: "Mastercard", role: "Incoming Corporate Strategy & Commercialization Intern", when: "2026 — offer",
+      org: "Mastercard", role: "Incoming Corporate Strategy & Commercialization Intern", when: "2026 · offer",
       bullets: ["Supporting B2B strategy through product performance and executive reporting."],
     },
     {
@@ -25,12 +25,12 @@ const PROFILE = {
       ],
     },
     {
-      org: "JCommerce Distribution", role: "Founder", when: "2023 — 2025",
+      org: "JCommerce Distribution", role: "Founder", when: "2023 · 2025",
       bullets: ["Built a wholesale e-commerce company to $400K+ ARR across 250+ SKUs and 20+ distributors."],
     },
   ],
   story:
-    "Started a $400K e-commerce business out of a garage before I could legally rent a car. I don't wait for postings — I find the person who owns the problem and show up with work already done.",
+    "Started a $400K e-commerce business out of a garage before I could legally rent a car. I don't wait for postings, I find the person who owns the problem and show up with work already done.",
 };
 
 /* why[] = personalization hooks the agent "found"; signal = recent activity */
@@ -47,7 +47,7 @@ const CONTACTS = [
     id: "ravi", name: "Ravi Tran", initials: "RT", role: "Eng Manager · UCI alum '19", company: "Stripe",
     source: "alumni", type: "coffee", match: 94, location: "South Bay, CA", color: "mint",
     tags: ["UCI alum", "Hires interns every summer"],
-    signal: "Alum — Paul Merage mentor list, active this quarter",
+    signal: "Alum, Paul Merage mentor list, active this quarter",
     why: ["Same school, eight years ahead of you", "Mentors first-gen students", "His team owns billing growth"],
     email: "ravi.tran@stripe.com",
   },
@@ -56,7 +56,7 @@ const CONTACTS = [
     source: "yc", type: "job", match: 91, location: "Remote", color: "blush",
     tags: ["YC W26", "Founding team of 5", "Hiring ops generalist"],
     signal: "YC directory: “first ops hire” listed 5 days ago",
-    why: ["She needs an ops generalist yesterday", "You automated rev-ops at IntegriTurf", "Founders answer founders — lead with your $400K story"],
+    why: ["She needs an ops generalist yesterday", "You automated rev-ops at IntegriTurf", "Founders answer founders, lead with your $400K story"],
     email: "elena@latticerobotics.com",
   },
   {
@@ -72,15 +72,15 @@ const CONTACTS = [
     source: "hiring", type: "job", match: 87, location: "Costa Mesa, CA", color: "lavender",
     tags: ["12 intern reqs open", "Likes portfolio links"],
     signal: "Opened 12 Summer '27 intern roles this week",
-    why: ["A dozen open reqs means inbox triage — short wins", "Defense-tech values builders with proof", "You're 15 minutes away"],
+    why: ["A dozen open reqs means inbox triage, short wins", "Defense-tech values builders with proof", "You're 15 minutes away"],
     email: "dkim@anduril.com",
   },
   {
-    id: "sofia", name: "Sofia Marin", initials: "SM", role: "Case Comp Director", company: "Deloitte — SoCal",
+    id: "sofia", name: "Sofia Marin", initials: "SM", role: "Case Comp Director", company: "Deloitte, SoCal",
     source: "hiring", type: "case", match: 85, location: "Los Angeles, CA", color: "mint",
     tags: ["Runs national case comp", "Sponsors student orgs"],
     signal: "Sponsorship apps open for Spring cycle",
-    why: ["She picks sponsored schools next month", "Your club needs a partner — she needs reach at UCI", "Past winners got fast-track interviews"],
+    why: ["She picks sponsored schools next month", "Your club needs a partner, she needs reach at UCI", "Past winners got fast-track interviews"],
     email: "smarin@deloitte.com",
   },
   {
@@ -96,7 +96,7 @@ const CONTACTS = [
     source: "alumni", type: "coffee", match: 83, location: "Burbank, CA", color: "butter",
     tags: ["UCI alum", "Was a Merage TA"],
     signal: "Promoted to Strategy Manager 3 weeks ago",
-    why: ["Congratulate the promotion — timing is everything", "She TA'd the strategy class you aced", "Disney strategy takes spring externs"],
+    why: ["Congratulate the promotion, timing is everything", "She TA'd the strategy class you aced", "Disney strategy takes spring externs"],
     email: "grace.obi@disney.com",
   },
   {
@@ -104,7 +104,7 @@ const CONTACTS = [
     source: "hiring", type: "job", match: 82, location: "New York, NY", color: "lavender",
     tags: ["Posted role 5h ago", "Python required"],
     signal: "BizOps intern req opened 5 hours ago",
-    why: ["Early applicant window — first 24h matter", "Ramp loves operators who automate", "Your SQL + Python clears the bar"],
+    why: ["Early applicant window, first 24h matter", "Ramp loves operators who automate", "Your SQL + Python clears the bar"],
     email: "theo.brandt@ramp.com",
   },
   {
@@ -112,7 +112,7 @@ const CONTACTS = [
     source: "vc", type: "coffee", match: 80, location: "Irvine, CA", color: "mint",
     tags: ["Invests in student founders", "Office hours monthly"],
     signal: "Announced campus office hours for winter",
-    why: ["She backs student founders — you built one", "Office hours fill in 48h", "Warm her up before the JCommerce story"],
+    why: ["She backs student founders, you built one", "Office hours fill in 48h", "Warm her up before the JCommerce story"],
     email: "lina@westcliff.vc",
   },
   {
@@ -144,11 +144,11 @@ const CONTACTS = [
 /* Pre-existing outreach state so the dashboard feels lived-in */
 const SEED_OUTREACH = [
   { contactId: "ravi", stage: "replied", lastTouch: "2h ago", opens: 3,
-    note: "“Happy to chat — grab time on my calendly?”" },
+    note: "“Happy to chat, grab time on my calendly?”" },
   { contactId: "grace", stage: "opened", lastTouch: "5h ago", opens: 2, note: null },
   { contactId: "marcus", stage: "sent", lastTouch: "1d ago", opens: 0, note: null },
   { contactId: "sofia", stage: "meeting", lastTouch: "3d ago", opens: 4,
-    note: "Intro call booked — Thu 2:00 PM" },
+    note: "Intro call booked, Thu 2:00 PM" },
   { contactId: "theo", stage: "drafted", lastTouch: "just now", opens: 0, note: null },
 ];
 
@@ -158,21 +158,21 @@ const SEED_THREADS = [
     subject: "Re: fellow anteater in billing-land",
     messages: [
       { from: "you", time: "Yesterday, 9:41 AM",
-        text: "Hi Ravi — fellow Anteater (Merage '27). I automated a rev-ops stack that saved a client $70K last summer and I'm trying to learn how billing infra works at real scale. Could I get 15 minutes of your time? I'll come with three specific questions, not a resume dump. — Aaron" },
+        text: "Hi Ravi, fellow Anteater (Merage '27). I automated a rev-ops stack that saved a client $70K last summer and I'm trying to learn how billing infra works at real scale. Could I get 15 minutes of your time? I'll come with three specific questions, not a resume dump., Aaron" },
       { from: "them", time: "Today, 2:14 PM",
-        text: "Ha — “not a resume dump” got me. Zot zot. Happy to chat; grab any slot on my calendly this week. Bring the $70K story, that's the interesting part." },
+        text: "Ha, “not a resume dump” got me. Zot zot. Happy to chat; grab any slot on my calendly this week. Bring the $70K story, that's the interesting part." },
     ],
   },
   {
     contactId: "sofia", unread: false, warm: true, when: "Mon",
-    subject: "Re: UCI x Deloitte case comp — sponsorship",
+    subject: "Re: UCI x Deloitte case comp, sponsorship",
     messages: [
       { from: "you", time: "Last Thu, 8:15 AM",
-        text: "Hi Sofia — I run the strategy club at UCI Merage (120 active members). We're hosting a case comp this spring and want Deloitte as the headline. Past sponsors got direct pipeline to our top 10 finishers. 15 minutes to walk you through the deck?" },
+        text: "Hi Sofia, I run the strategy club at UCI Merage (120 active members). We're hosting a case comp this spring and want Deloitte as the headline. Past sponsors got direct pipeline to our top 10 finishers. 15 minutes to walk you through the deck?" },
       { from: "them", time: "Mon, 11:02 AM",
         text: "We're finalizing the spring sponsorship slate this month, so good timing. Booked the Thursday slot your scheduling link offered. Send the deck ahead please." },
       { from: "you", time: "Mon, 11:30 AM",
-        text: "Deck attached — see you Thursday at 2. Thank you!" },
+        text: "Deck attached, see you Thursday at 2. Thank you!" },
     ],
   },
   {
@@ -180,12 +180,12 @@ const SEED_THREADS = [
     subject: "congrats on Strategy Manager 🎉",
     messages: [
       { from: "you", time: "Tue, 9:02 AM",
-        text: "Grace — saw the promotion to Strategy Manager, congrats! You TA'd my strategy class section two years ago (I was the one who kept asking about Disney+ bundling economics). Would love 15 minutes to hear what the jump from senior analyst was like." },
+        text: "Grace, saw the promotion to Strategy Manager, congrats! You TA'd my strategy class section two years ago (I was the one who kept asking about Disney+ bundling economics). Would love 15 minutes to hear what the jump from senior analyst was like." },
     ],
   },
 ];
 
-/* Agent run script — steps rendered with delays in the drawer */
+/* Agent run script, steps rendered with delays in the drawer */
 function agentScript(c) {
   return [
     { icon: "🔎", label: `Researching ${c.name.split(" ")[0]}`, detail: `Reading ${c.company} site, recent posts, ${c.source === "yc" ? "YC directory entry" : c.source === "alumni" ? "alumni database" : "open roles & team page"}…`, ms: 1400 },
@@ -202,40 +202,40 @@ function draftEmail(c) {
     maya: "intern who ships before being asked",
     ravi: "fellow anteater in billing-land",
     elena: "your first ops hire (I've done this before)",
-    marcus: "Merage student — 3 questions about Fund III",
-    dana: "Anduril intern reqs — 15 min from campus",
-    sofia: "UCI x Deloitte case comp — sponsorship",
+    marcus: "Merage student, 3 questions about Fund III",
+    dana: "Anduril intern reqs, 15 min from campus",
+    sofia: "UCI x Deloitte case comp, sponsorship",
     jonas: "saw your growth-ops tweet. send help = me",
     grace: "congrats on Strategy Manager 🎉",
-    theo: "BizOps req (5h old) — early applicant",
+    theo: "BizOps req (5h old), early applicant",
     lina: "student founder, $400K ARR, office hours?",
-    omar: "founding analyst — I'm in San Diego too",
-    nina: "EY x UCI case comp — spring slate",
-    petra: "post-acquisition ops — automation story",
+    omar: "founding analyst, I'm in San Diego too",
+    nina: "EY x UCI case comp, spring slate",
+    petra: "post-acquisition ops, automation story",
   }[c.id] || `quick note from a UCI student`;
 
   const bodies = {
-    job: `Hi ${first} — I'm Aaron, a Merage student at UC Irvine. ${c.why[1] || ""} Last summer I cut a client's fulfillment time 25% and saved them $70K by automating their rev-ops stack; before that I built a $400K e-commerce business from scratch.\n\n${c.why[0]}. I'd love to show you what I'd do in the role — I've already sketched a 30-day plan. 15 minutes this week?\n\n${PROFILE.voice.signoff}`,
-    coffee: `Hi ${first} — Aaron Johnson, UCI Merage '27. ${c.why[0]}. I'm not asking for a job — I want 15 minutes and I'll bring three specific questions, not a resume dump.\n\nFor context: I founded a $400K wholesale business and spent last summer automating revenue ops. ${c.why[2] || ""}\n\nAny slot works. ${PROFILE.voice.signoff}`,
-    case: `Hi ${first} — I run the strategy club at UCI Merage (120 active members). ${c.why[1] || "We're hosting a spring case competition and want a headline sponsor."}\n\n${c.why[0]}. Past sponsors got direct pipeline to our top finishers. Can I send the one-page deck?\n\n${PROFILE.voice.signoff}`,
+    job: `Hi ${first}, I'm Aaron, a Merage student at UC Irvine. ${c.why[1] || ""} Last summer I cut a client's fulfillment time 25% and saved them $70K by automating their rev-ops stack; before that I built a $400K e-commerce business from scratch.\n\n${c.why[0]}. I'd love to show you what I'd do in the role, I've already sketched a 30-day plan. 15 minutes this week?\n\n${PROFILE.voice.signoff}`,
+    coffee: `Hi ${first}, Aaron Johnson, UCI Merage '27. ${c.why[0]}. I'm not asking for a job, I want 15 minutes and I'll bring three specific questions, not a resume dump.\n\nFor context: I founded a $400K wholesale business and spent last summer automating revenue ops. ${c.why[2] || ""}\n\nAny slot works. ${PROFILE.voice.signoff}`,
+    case: `Hi ${first}, I run the strategy club at UCI Merage (120 active members). ${c.why[1] || "We're hosting a spring case competition and want a headline sponsor."}\n\n${c.why[0]}. Past sponsors got direct pipeline to our top finishers. Can I send the one-page deck?\n\n${PROFILE.voice.signoff}`,
   };
   return { subject: subj, body: bodies[c.type] || bodies.job };
 }
 
 /* Simulated replies for the demo loop */
 const SIM_REPLIES = {
-  maya: "Short and specific — thank you. Send the 30-day sketch and your portfolio; if it holds up I'll pull you into the intern screen this cycle.",
+  maya: "Short and specific, thank you. Send the 30-day sketch and your portfolio; if it holds up I'll pull you into the intern screen this cycle.",
   elena: "Ok “I've done this before” is a bold subject line but you backed it up. Can you do a 20-min call tomorrow? Bring the Airtable CRM story.",
-  theo: "Good timing and good instincts. I'll flag you to the recruiter — mention this thread when the application asks how you heard about us.",
-  jonas: "lol. ok. you're hired for a trial project — kidding, mostly. what's your availability this week?",
+  theo: "Good timing and good instincts. I'll flag you to the recruiter, mention this thread when the application asks how you heard about us.",
+  jonas: "lol. ok. you're hired for a trial project, kidding, mostly. what's your availability this week?",
   omar: "San Diego founding analyst pipeline is officially open. Coffee Friday? I'm near UTC.",
-  dana: "We do like builders. Apply to req #4417 and reply here with the confirmation # — I'll make sure a human reads it.",
-  default: "Thanks for the note — this stood out. Let's find 15 minutes; send me a couple of times that work.",
+  dana: "We do like builders. Apply to req #4417 and reply here with the confirmation #, I'll make sure a human reads it.",
+  default: "Thanks for the note, this stood out. Let's find 15 minutes; send me a couple of times that work.",
 };
 
 const STAGES = [
   { id: "drafted", label: "Drafted", hint: "Waiting for your approval" },
-  { id: "sent", label: "Sent", hint: "Knocked — waiting" },
+  { id: "sent", label: "Sent", hint: "Knocked, waiting" },
   { id: "opened", label: "Opened", hint: "They're reading" },
   { id: "replied", label: "Replied", hint: "Door is open" },
   { id: "meeting", label: "Meeting booked", hint: "Go win" },
