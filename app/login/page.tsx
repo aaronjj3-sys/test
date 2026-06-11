@@ -15,23 +15,28 @@ function LoginForm() {
     setLoading(true);
     setMessage(null);
 
-    const supabase = createClient();
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-        scopes:
-          "openid email profile https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/gmail.send",
-        queryParams: {
-          access_type: "offline",
-          prompt: "consent",
+    try {
+      const supabase = createClient();
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+          scopes:
+            "openid email profile https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/gmail.send",
+          queryParams: {
+            access_type: "offline",
+            prompt: "consent",
+          },
         },
-      },
-    });
+      });
 
-    if (error) {
+      if (error) {
+        setLoading(false);
+        setMessage(error.message);
+      }
+    } catch (error) {
       setLoading(false);
-      setMessage(error.message);
+      setMessage(error instanceof Error ? error.message : "Supabase is not configured.");
     }
   }
 
@@ -47,6 +52,12 @@ function LoginForm() {
         {hasCallbackError ? (
           <div className="notice" role="alert">
             Google sign-in could not be completed. Try again.
+          </div>
+        ) : null}
+
+        {searchParams.get("error") === "supabase_not_configured" ? (
+          <div className="notice" role="alert">
+            Supabase is not configured for this deployment yet.
           </div>
         ) : null}
 

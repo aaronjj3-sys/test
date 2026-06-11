@@ -1,8 +1,14 @@
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, hasSupabaseEnv } from "@/lib/supabase/server";
 import { LogoutButton } from "./logout-button";
 
+export const dynamic = "force-dynamic";
+
 export default async function DashboardPage() {
+  if (!hasSupabaseEnv()) {
+    redirect("/login?error=supabase_not_configured");
+  }
+
   const supabase = createClient();
   const {
     data: { user },

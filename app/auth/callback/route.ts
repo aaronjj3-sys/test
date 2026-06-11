@@ -1,12 +1,14 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, hasSupabaseEnv } from "@/lib/supabase/server";
+
+export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   const requestUrl = new URL(request.url);
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || requestUrl.origin;
   const code = requestUrl.searchParams.get("code");
 
-  if (!code) {
+  if (!code || !hasSupabaseEnv()) {
     return NextResponse.redirect(new URL("/login?error=auth_callback_failed", appUrl));
   }
 

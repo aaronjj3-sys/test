@@ -92,7 +92,7 @@ if (!reduceMotion) {
     const p = path.getPointAtLength(flight.t * pathLen);
     const p2 = path.getPointAtLength(Math.min(flight.t * pathLen + 2, pathLen));
     const ang = (Math.atan2(p2.y - p.y, p2.x - p.x) * 180) / Math.PI;
-    planeEl.setAttribute("transform", `translate(${p.x - 17}, ${p.y - 15}) rotate(${ang} 17 15)`);
+    planeEl.setAttribute("transform", `translate(${p.x - 20}, ${p.y - 17}) rotate(${ang} 20 17)`);
   };
   placePlane();
   gsap.to(flight, {
