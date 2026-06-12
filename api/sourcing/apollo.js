@@ -11,6 +11,9 @@ export default async function handler(req, res) {
   if (!input.profile || typeof input.profile.story !== "string") {
     return res.status(400).json({ error: "profile.story is required" });
   }
+  /* server-side pagination: int >= 1, defaults to 1, passed through to Apollo/mock */
+  const page = Math.floor(Number(input.page));
+  input.page = Number.isFinite(page) && page > 0 ? page : 1;
 
   if (!apolloConfigured()) {
     return res.status(200).json(mockSourcing(input)); // development fallback, clearly labeled

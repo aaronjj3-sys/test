@@ -1,12 +1,15 @@
 /* POST /api/profile/parse-resume
    Input:  { fileName, contentBase64 }  (or { text } if already extracted)
-   Output: { ok, parsed: {...facts}, textExtracted, source: "claude"|"deterministic" }
-   Uses Claude (haiku, structured JSON) when ANTHROPIC_API_KEY is set;
-   deterministic extraction otherwise. Never stores the file server-side. */
+   Output: { ok, parsed: {...facts}, textExtracted, source: "openai"|"claude"|"deterministic" }
+   OpenAI (MODELS.draft, structured JSON) is tried first when CHATGPT_API_KEY
+   is set, then Claude (legacy path) when ANTHROPIC_API_KEY is set, then
+   deterministic extraction. Never stores the file server-side. */
 
 import { extractText } from "../../lib/resume/extract.js";
 import { extractResumeFacts } from "../../lib/resume/facts.js";
 import { claudeJSON, claudeConfigured, RESUME_SCHEMA } from "../../lib/knock/claude.js";
+import { openaiJSON, openaiConfigured, MODELS } from "../../lib/knock/openai.js";
+import { resumeSystem, RESUME_JSON_SCHEMA } from "../../lib/knock/prompts.js";
 
 const MAX_FILE_BYTES = 6 * 1024 * 1024;
 const MAX_TEXT_CHARS = 24_000;
@@ -38,13 +41,26 @@ export default async function handler(req, res) {
   const deterministic = extractResumeFacts(text);
 
   let parsed = null;
-  if (claudeConfigured()) {
+  let source = "deterministic";
+  if (openaiConfigured()) {
+    parsed = await openaiJSON({
+      system: resumeSystem(),
+      prompt: `Parse this resume:\n\n${text}`,
+      schema: RESUME_JSON_SCHEMA,
+      model: MODELS.draft,
+      maxTokens: 2500,
+      effort: "low",
+    });
+    if (parsed) source = "openai";
+  }
+  if (!parsed && claudeConfigured()) {
     parsed = await claudeJSON({
       system: "You parse resumes into structured profile data for a cold-outreach product. Be faithful to the document: keep the person's numbers and phrasing in wins and bullets, fix obvious typos in proper nouns (school and company names), and never invent facts.",
       prompt: `Parse this resume:\n\n${text}`,
       schema: RESUME_SCHEMA,
       maxTokens: 2500,
     });
+    if (parsed) source = "claude";
   }
 
   const merged = parsed
@@ -54,7 +70,7 @@ export default async function handler(req, res) {
   return res.status(200).json({
     ok: true,
     textExtracted: true,
-    source: parsed ? "claude" : "deterministic",
+    source,
     parsed: merged,
   });
 }
