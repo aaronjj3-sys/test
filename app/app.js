@@ -16,7 +16,17 @@ const load = (k, fallback) => {
     return v === null ? fallback : v;
   } catch { return fallback; }
 };
-const save = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+/* keys that ride along to Supabase (profiles.app_state) so the account
+   follows the login across devices; everything else stays device-local */
+const SYNCED_KEYS = new Set([
+  "knock_doors", "knock_doors_meta", "knock_campaigns", "knock_messages",
+  "knock_left", "knock_plan", "knock_search_mode", "knock_filters",
+  "knock_autonomy", "knock_send_prefs", "knock_tracker_tab",
+]);
+const save = (k, v) => {
+  localStorage.setItem(k, JSON.stringify(v));
+  if (SYNCED_KEYS.has(k)) scheduleSyncAppState();
+};
 
 /* one-time migration: clear demo-era data so accounts start fresh */
 if (localStorage.getItem("knock_v") !== "2") {
@@ -43,7 +53,7 @@ const state = {
   sendPrefs: load("knock_send_prefs", null),
   doorsPage: 0,
   selectedDoors: new Set(),
-  trackerTab: "all",
+  trackerTab: load("knock_tracker_tab", "all"),
   sourcing: false,
   prefetchingDoors: false,
 };
@@ -62,6 +72,140 @@ const saveLive = () => {
   save("knock_left", state.knocks);
   save("knock_plan", state.plan);
 };
+/* ---------------- cross-device state sync (profiles.app_state) ----------------
+   Everything the UI persists to localStorage (except the profile, which has its
+   own profile_json sync) is mirrored into the user's `profiles` row, debounced.
+   Dev mode (no Supabase) no-ops; failures are console-only and the app keeps
+   running on localStorage. */
+let appSyncTimer = null;
+let syncSuspended = false;
+
+const canSyncState = () => {
+  const auth = window.knockAuth;
+  return Boolean(auth?.client && auth.user?.id && auth.user.id !== "dev");
+};
+
+function scheduleSyncAppState() {
+  if (syncSuspended) return;
+  /* track when local state last changed, for the newer-wins merge on load */
+  save("knock_state_updated_at", new Date().toISOString());
+  if (!canSyncState()) return;
+  clearTimeout(appSyncTimer);
+  appSyncTimer = setTimeout(syncAppStateNow, 3000);
+}
+
+/* strip the bulky Apollo payload; keep every field the UI renders or sends */
+function slimDoor(d) {
+  if (!d || typeof d !== "object") return d;
+  const { raw, ...rest } = d;
+  return rest;
+}
+
+function buildAppState() {
+  return {
+    version: 1,
+    updatedAt: load("knock_state_updated_at", new Date().toISOString()),
+    doors: state.doors ? state.doors.slice(0, 300).map(slimDoor) : null,
+    doorsMeta: state.doorsMeta,
+    campaigns: state.campaigns,
+    messages: state.messages,
+    knocks: state.knocks,
+    plan: state.plan,
+    searchMode: state.searchMode,
+    searchFilters: state.searchFilters,
+    autonomy: state.autonomy,
+    sendPrefs: state.sendPrefs,
+    trackerTab: state.trackerTab,
+  };
+}
+
+async function syncAppStateNow() {
+  clearTimeout(appSyncTimer);
+  appSyncTimer = null;
+  if (!canSyncState()) return;
+  const auth = window.knockAuth;
+  try {
+    const { error } = await auth.client.from("profiles").upsert({
+      user_id: auth.user.id,
+      email: auth.user.email || null,
+      app_state: buildAppState(),
+    }, { onConflict: "user_id" });
+    if (error) console.warn("[knock] state sync skipped:", error.message);
+  } catch (err) {
+    console.warn("[knock] state sync skipped:", err?.message || err);
+  }
+}
+
+/* flush a pending debounce when the tab goes to the background */
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden" && appSyncTimer) syncAppStateNow();
+});
+
+/* message statuses only ever advance; a stale device can never un-send a knock */
+const STATUS_RANK = {
+  drafting: 0, queued: 1, paused: 1, waiting_gmail: 1, sending: 2,
+  failed: 3, scheduled: 3, sent: 4, followup_sent: 5, opened: 6,
+  replied: 7, needs_review: 7, meeting: 8,
+};
+
+function mergeMessages(base, other) {
+  const out = new Map();
+  for (const m of [...(base || []), ...(other || [])]) {
+    if (!m || !m.id) continue;
+    const prev = out.get(m.id);
+    if (!prev) { out.set(m.id, m); continue; }
+    const rPrev = STATUS_RANK[prev.status] ?? 0;
+    const rNew = STATUS_RANK[m.status] ?? 0;
+    if (rNew > rPrev || (rNew === rPrev && (m.updatedAt || "") > (prev.updatedAt || ""))) out.set(m.id, m);
+  }
+  return [...out.values()].sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+}
+
+/* merge policy: empty local adopts remote wholesale; otherwise the newer
+   updatedAt wins as the base, and messages are merged by id either way so
+   sent/replied statuses from any device always survive. */
+function adoptRemoteAppState(remote) {
+  if (!remote || typeof remote !== "object" || !remote.version) return;
+  const localUpdatedAt = load("knock_state_updated_at", "");
+  const localEmpty = !(state.doors || []).length && !state.messages.length && !state.campaigns.length;
+  const useRemote = localEmpty || (remote.updatedAt || "") > localUpdatedAt;
+  syncSuspended = true;
+  try {
+    if (useRemote) {
+      if (Array.isArray(remote.doors) && remote.doors.length) {
+        state.doors = remote.doors;
+        state.doorsMeta = remote.doorsMeta || state.doorsMeta;
+        state.doorsPage = 0;
+      }
+      if (Array.isArray(remote.campaigns)) state.campaigns = remote.campaigns;
+      state.messages = mergeMessages(remote.messages, state.messages);
+      if (typeof remote.knocks === "number") state.knocks = localEmpty ? remote.knocks : Math.min(state.knocks, remote.knocks);
+      if (remote.plan) state.plan = remote.plan;
+      if (remote.searchMode) state.searchMode = remote.searchMode;
+      if (remote.searchFilters) state.searchFilters = remote.searchFilters;
+      if (remote.autonomy) state.autonomy = remote.autonomy;
+      if (remote.sendPrefs) state.sendPrefs = remote.sendPrefs;
+      if (remote.trackerTab) state.trackerTab = remote.trackerTab;
+      saveLive();
+      save("knock_search_mode", state.searchMode);
+      save("knock_filters", state.searchFilters);
+      save("knock_autonomy", state.autonomy);
+      save("knock_send_prefs", state.sendPrefs);
+      save("knock_tracker_tab", state.trackerTab);
+      save("knock_state_updated_at", remote.updatedAt || new Date().toISOString());
+    } else {
+      /* local is newer: still pick up more-advanced message statuses from remote */
+      state.messages = mergeMessages(state.messages, remote.messages);
+      if (typeof remote.knocks === "number") state.knocks = Math.min(state.knocks, remote.knocks);
+      saveLive();
+    }
+  } finally {
+    syncSuspended = false;
+  }
+  /* push the merged truth back up so every device converges */
+  scheduleSyncAppState();
+}
+
 const doorById = (id) => (state.doors || []).find((d) => d.id === id);
 const msgById = (id) => state.messages.find((m) => m.id === id);
 const latestMsgForDoor = (doorId) => {
@@ -778,6 +922,8 @@ function openDoorDraft(d) {
     const text = noEmDash($("#dd-body").innerText.trim());
     const subject = noEmDash($("#dd-subject").value.trim());
     if ((text && text !== d.draft?.body) || (subject && subject !== d.draft?.subject)) {
+      /* the user rewrote the draft in their own words: learn from it */
+      if (text && d.draft?.body && text !== d.draft.body) captureEditedSample(text);
       d.draft = { ...(d.draft || {}), subject: subject || d.draft?.subject, body: text || d.draft?.body };
       saveLive();
     }
@@ -1270,7 +1416,7 @@ function renderTracker() {
   </div>`;
 
   $$(".ftab", view).forEach((b) =>
-    b.addEventListener("click", () => { state.trackerTab = b.dataset.id; renderTracker(); }));
+    b.addEventListener("click", () => { state.trackerTab = b.dataset.id; save("knock_tracker_tab", state.trackerTab); renderTracker(); }));
   $("#tr-cta", view)?.addEventListener("click", () => { location.hash = "dashboard"; });
 
   /* one delegated listener so rows can be re-rendered in place */
@@ -1330,6 +1476,7 @@ function openSuggestedReply(m) {
   $("#sr-send").addEventListener("click", async () => {
     const btn = $("#sr-send");
     btn.disabled = true; btn.textContent = "Sending…";
+    const finalBody = noEmDash($("#sr-body").value.trim());
     try {
       const res = await fetch("/api/gmail/send", {
         method: "POST",
@@ -1348,6 +1495,8 @@ function openSuggestedReply(m) {
       const data = await res.json().catch(() => ({}));
       if (res.status === 412 || data.error === "google_not_connected") throw new Error("Google isn't connected");
       if (!res.ok || !data.ok) throw new Error(data.error || `Send failed (${res.status})`);
+      /* they edited Scout's suggested reply before sending: learn from it */
+      if (finalBody && finalBody !== noEmDash(body).trim()) captureEditedSample(finalBody);
       m.status = "replied";
       m.replySent = true;
       saveLive(); updateMessageRow(m); updateChrome();
@@ -1428,6 +1577,42 @@ function saveProfile() {
   schedulePersistProfile();
 }
 
+/* ---- style learning from user edits ----
+   When the user meaningfully rewrites outgoing text, keep their final
+   version as a voice exemplar (newest first, max 10, deduped). Every 3rd
+   new sample re-runs style analysis so drafts drift toward how they
+   actually write. Persists with the profile (profile_json sync). */
+function captureEditedSample(text) {
+  const t = (text || "").trim();
+  if (!state.profile || t.length < 80) return;
+  const list = state.profile.editedSamples || [];
+  if (list.includes(t)) return;
+  state.profile.editedSamples = [t, ...list].slice(0, 10);
+  state.profile.editedSampleCount = (state.profile.editedSampleCount || 0) + 1;
+  saveProfile();
+  if (state.profile.editedSampleCount % 3 === 0) refreshStyleFromEdits();
+}
+
+async function refreshStyleFromEdits() {
+  const p = state.profile;
+  if (!p) return;
+  const samples = [...(p.editedSamples || []), ...(p.sampleTexts || [])].slice(0, 20);
+  if (!samples.length) return;
+  try {
+    const res = await fetch("/api/profile/analyze-style", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ samples, story: p.story || "" }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (data.ok && data.styleProfile) {
+      p.styleProfile = data.styleProfile;
+      saveProfile();
+      toast("Scout learned from your edits");
+    }
+  } catch { /* style learning is a bonus, never a blocker */ }
+}
+
 /* ---- durable profile persistence (Supabase `profiles` table) ----
    Debounced upsert on every save; failures log to console only and the
    app keeps running on localStorage (dev mode has no Supabase at all). */
@@ -1465,21 +1650,33 @@ async function persistProfileNow() {
   }
 }
 
-/* on a fresh device/reset, pull the profile back from Supabase */
-async function hydrateProfileFromSupabase() {
-  if (state.profile) return;
+/* on boot (and on a fresh device), pull the profile and the synced app
+   state back from Supabase so the whole account follows the login */
+async function hydrateFromSupabase() {
   const auth = window.knockAuth;
   if (!auth?.client || !auth.user?.id || auth.user.id === "dev") return;
   try {
-    const { data, error } = await auth.client
-      .from("profiles").select("profile_json").eq("user_id", auth.user.id).limit(1);
-    const row = Array.isArray(data) ? data[0] : data;
-    if (!error && row?.profile_json) {
-      state.profile = row.profile_json;
+    let res = await auth.client
+      .from("profiles").select("profile_json, app_state").eq("user_id", auth.user.id).limit(1);
+    if (res.error && /app_state/i.test(res.error.message || "")) {
+      /* migration 004 not applied yet: profile sync still works */
+      res = await auth.client
+        .from("profiles").select("profile_json").eq("user_id", auth.user.id).limit(1);
+    }
+    if (res.error) {
+      console.warn("[knock] hydrate skipped:", res.error.message);
+      return;
+    }
+    const row = Array.isArray(res.data) ? res.data[0] : res.data;
+    if (!row) return;
+    const remoteProfile = row.profile_json;
+    if (remoteProfile && (!state.profile || (remoteProfile.updatedAt || "") > (state.profile.updatedAt || ""))) {
+      state.profile = remoteProfile;
       save("knock_profile", state.profile);
     }
+    adoptRemoteAppState(row.app_state);
   } catch (err) {
-    console.warn("[knock] profile hydrate skipped:", err?.message || err);
+    console.warn("[knock] hydrate skipped:", err?.message || err);
   }
 }
 
@@ -1499,6 +1696,9 @@ function mergeParsedProfile(p, parsed) {
   if (Array.isArray(parsed.experience) && parsed.experience.length) {
     p.experience = parsed.experience;
   }
+  if (Array.isArray(parsed.education) && parsed.education.length) {
+    p.education = parsed.education;
+  }
   if (!p.location && parsed.location) p.location = parsed.location;
   if (!p.fullName && parsed.fullName) p.fullName = parsed.fullName;
   const bits = [];
@@ -1507,6 +1707,9 @@ function mergeParsedProfile(p, parsed) {
   if (parsed.experience?.length) bits.push(`${parsed.experience.length} role${parsed.experience.length === 1 ? "" : "s"}`);
   return bits.join(", ");
 }
+
+/* resume highlights card: remembers expanded/collapsed across re-renders */
+let rhExpanded = false;
 
 function renderProfile() {
   if (!state.profile) return renderNeedsProfile();
@@ -1548,18 +1751,43 @@ function renderProfile() {
           <h3>Your story <button class="edit" data-edit="story">Edit</button></h3>
           <p class="story" id="story-text">${p.story ? `“${esc(p.story)}”` : "Add the one or two sentences that make people reply."}</p>
         </div>
-        <div class="pcard">
-          <h3>Experience <button class="edit" id="xp-add">+ Add</button></h3>
-          <div class="xp">
-            ${(p.experience || []).map((x, i) => `
-              <div class="xp__item" data-i="${i}">
-                <strong>${esc(x.role)}</strong>
-                <span class="when">${esc(x.org)}${x.when ? " · " + esc(x.when) : ""}</span>
-                <ul>${(x.bullets || []).map((b) => `<li>${esc(b)}</li>`).join("")}</ul>
-                <div class="xp__actions"><button class="edit xp-edit" data-i="${i}">Edit</button><button class="edit xp-del" data-i="${i}">Remove</button></div>
-              </div>`).join("")}
-            ${(p.experience || []).length === 0 ? `<p class="empty-line">No experience added yet. Add the roles and wins you want Scout to lead with.</p>` : ""}
+        <div class="pcard rhcard">
+          <h3>Resume highlights</h3>
+          <div class="rh-clip ${rhExpanded ? "" : "is-collapsed"}" id="rh-clip">
+            <div class="rh-sect">
+              <h4 class="rh-sub">Education <button class="edit" id="edu-add">+ Add</button></h4>
+              <div class="xp">
+                ${(p.education || []).map((x, i) => `
+                  <div class="xp__item" data-i="${i}">
+                    <strong>${esc(x.school)}</strong>
+                    <span class="when">${esc(x.degree || "")}${x.when ? (x.degree ? " · " : "") + esc(x.when) : ""}</span>
+                    ${(x.bullets || []).length ? `<ul>${(x.bullets || []).map((b) => `<li>${esc(b)}</li>`).join("")}</ul>` : ""}
+                    <div class="xp__actions">
+                      <button class="edit edu-edit" data-i="${i}" title="Edit this entry">${icon("pen", "icn icn--xs")} Edit</button>
+                      <button class="edit edu-del" data-i="${i}">Remove</button>
+                    </div>
+                  </div>`).join("")}
+                ${(p.education || []).length === 0 ? `<p class="empty-line">No education entries yet. Add your school, program, and years.</p>` : ""}
+              </div>
+            </div>
+            <div class="rh-sect">
+              <h4 class="rh-sub">Experience &amp; leadership <button class="edit" id="xp-add">+ Add</button></h4>
+              <div class="xp">
+                ${(p.experience || []).map((x, i) => `
+                  <div class="xp__item" data-i="${i}">
+                    <strong>${esc(x.role)}</strong>
+                    <span class="when">${esc(x.org)}${x.when ? " · " + esc(x.when) : ""}</span>
+                    <ul>${(x.bullets || []).map((b) => `<li>${esc(b)}</li>`).join("")}</ul>
+                    <div class="xp__actions">
+                      <button class="edit xp-edit" data-i="${i}" title="Edit this role">${icon("pen", "icn icn--xs")} Edit</button>
+                      <button class="edit xp-del" data-i="${i}">Remove</button>
+                    </div>
+                  </div>`).join("")}
+                ${(p.experience || []).length === 0 ? `<p class="empty-line">No experience added yet. Add the roles and wins you want Scout to lead with.</p>` : ""}
+              </div>
+            </div>
           </div>
+          <div class="rh-more" id="rh-more" hidden><button class="pill" id="rh-toggle">Show more</button></div>
         </div>
         <div class="pcard">
           <h3>Skills</h3>
@@ -1642,6 +1870,56 @@ function renderProfile() {
     }, { once: true });
   });
 
+  /* resume highlights: collapse to ~420px with a fade; expand on demand.
+     The full data always lives in state.profile, collapsed or not. */
+  const rhClip = $("#rh-clip", view);
+  const rhMore = $("#rh-more", view);
+  const rhToggle = $("#rh-toggle", view);
+  const applyRhClip = () => {
+    rhClip.classList.toggle("is-collapsed", !rhExpanded);
+    const overflows = rhClip.scrollHeight > rhClip.clientHeight + 4;
+    rhMore.hidden = !(rhExpanded || overflows);
+    rhToggle.textContent = rhExpanded ? "Show less" : "Show more";
+  };
+  applyRhClip();
+  rhToggle.addEventListener("click", () => { rhExpanded = !rhExpanded; applyRhClip(); });
+
+  /* education add/edit/remove (same row-editor pattern as experience) */
+  const eduModal = (x = { school: "", degree: "", when: "", bullets: [] }, idx = -1) => {
+    openModal(`
+      <h2>${idx >= 0 ? "Edit" : "Add"} education</h2>
+      <label>School</label><input type="text" id="e-school" value="${esc(x.school)}" placeholder="UC Irvine, Paul Merage School of Business">
+      <label>Degree / program</label><input type="text" id="e-degree" value="${esc(x.degree)}" placeholder="B.A. Business Administration">
+      <label>Years</label><input type="text" id="e-when" value="${esc(x.when)}" placeholder="2023 · 2027">
+      <label>Notes (one per line, optional)</label>
+      <textarea id="e-bullets" rows="3" placeholder="Dean's List, consulting club president">${esc((x.bullets || []).join("\n"))}</textarea>
+      <div class="modal__actions">
+        <button class="btn btn--ghost" id="m-cancel">Cancel</button>
+        <button class="btn btn--accent" id="m-save">Save</button>
+      </div>`);
+    $("#m-cancel").addEventListener("click", closeModal);
+    $("#m-save").addEventListener("click", () => {
+      const item = {
+        school: $("#e-school").value.trim(),
+        degree: $("#e-degree").value.trim(),
+        when: $("#e-when").value.trim(),
+        bullets: $("#e-bullets").value.split("\n").map((b) => b.trim()).filter(Boolean),
+      };
+      if (!item.school && !item.degree) { closeModal(); return; }
+      p.education = p.education || [];
+      if (idx >= 0) p.education[idx] = item; else p.education.push(item);
+      saveProfile(); closeModal(); renderProfile();
+      toast("Education saved");
+    });
+  };
+  $("#edu-add", view).addEventListener("click", () => eduModal());
+  $$(".edu-edit", view).forEach((b) => b.addEventListener("click", () => eduModal(p.education[+b.dataset.i], +b.dataset.i)));
+  $$(".edu-del", view).forEach((b) => b.addEventListener("click", () => {
+    p.education.splice(+b.dataset.i, 1);
+    saveProfile(); renderProfile();
+    toast("Removed");
+  }));
+
   /* experience add/edit/remove */
   const xpModal = (x = { role: "", org: "", when: "", bullets: [] }, idx = -1) => {
     openModal(`
@@ -1683,7 +1961,12 @@ function renderProfile() {
     p.skills.splice(+b.dataset.i, 1);
     saveProfile(); renderProfile();
   }));
-  $("#skill-add", view).addEventListener("keydown", (e) => {
+  const skillInput = $("#skill-add", view);
+  /* normal pill footprint: width fits the placeholder, grows as you type */
+  skillInput.addEventListener("input", () => {
+    skillInput.style.width = Math.min(240, Math.max(96, skillInput.value.length * 7 + 36)) + "px";
+  });
+  skillInput.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
     const v = e.target.value.trim();
     if (!v) return;
@@ -1805,7 +2088,7 @@ function renderSettings() {
     $("#m-reset").addEventListener("click", () => {
       ["knock_profile", "knock_doors", "knock_doors_meta", "knock_campaigns", "knock_messages",
        "knock_connections", "knock_autonomy", "knock_left", "knock_plan", "knock_search_mode", "knock_ob_draft", "knock_days",
-       "knock_filters", "knock_send_prefs", "knock_tour_done"]
+       "knock_filters", "knock_send_prefs", "knock_tour_done", "knock_tracker_tab", "knock_state_updated_at"]
         .forEach((k) => localStorage.removeItem(k));
       location.reload();
     });
@@ -2268,9 +2551,13 @@ async function finishOnboarding() {
     signoff: `- ${(OB.fullName || "").split(" ")[0] || "Me"}`,
     traits: [...new Set([OB.personaLine, ...(OB.workStyles || [])].filter(Boolean))],
     writingSamples: OB.writingSamples || [],
+    sampleTexts: OB.sampleTexts || [],
+    editedSamples: [],
+    editedSampleCount: 0,
     quantifiedWins: wins,
     skills: [...new Set([...(parsed.skills || []), ...local.skills])].slice(0, 14),
     experience: parsed.experience || [],
+    education: parsed.education || [],
     extraContext: parsed.extraContext || "",
     styleProfile: null,
     goals: OB.industries || [],
@@ -2320,19 +2607,34 @@ const TOUR_STEPS = [
   { route: "settings", sel: ".settings-grid", title: "Settings", text: "Connections (Google, LinkedIn), agent autonomy, sending preferences, and your plan all live here." },
 ];
 
-function waitForEl(sel, timeout = 6000) {
+function waitForEl(sel, timeout = 2500) {
   return new Promise((resolve) => {
     const t0 = Date.now();
     (function poll() {
       const el = $(sel, view);
       if (el) return resolve(el);
       if (Date.now() - t0 > timeout) return resolve(null);
-      setTimeout(poll, 250);
+      setTimeout(poll, 200);
     })();
   });
 }
 
+function endTour(msg) {
+  document.getElementById("tour")?.remove();
+  save("knock_tour_done", true);
+  if (msg) toast(msg);
+}
+
+/* Escape always frees the user, even if a step ever misbehaves */
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.getElementById("tour")) {
+    endTour("Tour closed. Replay it anytime from the account menu");
+  }
+});
+
+let tourRunId = 0;
 async function startTour(stepIndex = 0) {
+  const runId = ++tourRunId;
   document.getElementById("tour")?.remove();
   if (stepIndex >= TOUR_STEPS.length) {
     save("knock_tour_done", true);
@@ -2340,11 +2642,14 @@ async function startTour(stepIndex = 0) {
     toast("That's the tour. Go knock on something");
     return;
   }
+  if (stepIndex < 0) stepIndex = 0;
   const step = TOUR_STEPS[stepIndex];
   if ((location.hash.replace("#", "") || "dashboard") !== step.route) {
     location.hash = step.route;
   }
   const el = await waitForEl(step.sel);
+  if (runId !== tourRunId) return; /* user moved on while we waited */
+  /* target missing on this view (still sourcing, empty state…): skip ahead */
   if (!el) return startTour(stepIndex + 1);
   el.scrollIntoView({ block: "center", behavior: "instant" });
 
@@ -2352,10 +2657,15 @@ async function startTour(stepIndex = 0) {
   const pad = 8;
   const tour = document.createElement("div");
   tour.id = "tour";
-  const cardBelow = r.bottom + 190 < window.innerHeight;
+  /* clamp the card fully on-screen: tall targets (like the doors table)
+     used to push it off-viewport, trapping the user under the overlay */
+  const CARD_W = 340, CARD_H = 220, gap = 16;
+  const left = Math.max(gap, Math.min(r.left, window.innerWidth - CARD_W - gap));
+  let top = r.bottom + CARD_H + gap < window.innerHeight ? r.bottom + gap : r.top - CARD_H - gap;
+  top = Math.max(gap, Math.min(top, window.innerHeight - CARD_H - gap));
   tour.innerHTML = `
     <div class="tour-hole" style="left:${r.left - pad}px;top:${r.top - pad}px;width:${r.width + pad * 2}px;height:${r.height + pad * 2}px"></div>
-    <div class="tour-card" style="${cardBelow ? `top:${r.bottom + 16}px` : `bottom:${window.innerHeight - r.top + 16}px`};left:${Math.max(16, Math.min(r.left, window.innerWidth - 360))}px">
+    <div class="tour-card" style="top:${top}px;left:${left}px">
       <small>${stepIndex + 1} of ${TOUR_STEPS.length}</small>
       <h3>${step.title}</h3>
       <p>${step.text}</p>
@@ -2368,11 +2678,8 @@ async function startTour(stepIndex = 0) {
   document.body.appendChild(tour);
   $("#tour-next").addEventListener("click", () => startTour(stepIndex + 1));
   $("#tour-back")?.addEventListener("click", () => startTour(stepIndex - 1));
-  $("#tour-skip").addEventListener("click", () => {
-    tour.remove();
-    save("knock_tour_done", true);
-    toast("You can replay the tour anytime from the account menu");
-  });
+  $("#tour-skip").addEventListener("click", () =>
+    endTour("You can replay the tour anytime from the account menu"));
 }
 
 function offerTour() {
@@ -2435,8 +2742,15 @@ $("#acct-tour")?.addEventListener("click", () => { $("#acct-menu").hidden = true
 
 /* ---------------- boot (auth-gated) ---------------- */
 (async function boot() {
+  /* brief loading state: never flash a login redirect while the session
+     check (and state hydration) is in flight */
+  view.innerHTML = `<div class="viewwrap"><div class="ghost ghost--boot">
+    <div class="ghost__icon ghost__icon--spin">${I.spark}</div>
+    <h2>Opening your doors…</h2>
+  </div></div>`;
   const user = await window.knockAuth.ready;
   if (!user) {
+    /* genuinely no session anywhere: back to the landing login */
     location.replace("../index.html#login");
     return;
   }
@@ -2445,8 +2759,9 @@ $("#acct-tour")?.addEventListener("click", () => { $("#acct-menu").hidden = true
     history.replaceState(null, "", location.pathname + "#dashboard");
   }
   handleConnectReturn();
-  /* nothing local? pull the profile back from Supabase before deciding on onboarding */
-  await hydrateProfileFromSupabase();
+  /* pull the profile and synced app state back from Supabase before
+     deciding on onboarding, so a new device starts with everything */
+  await hydrateFromSupabase();
   initAccount();
   navigate();
   syncConnections();
