@@ -34,7 +34,7 @@ const state = {
   doorsMeta: load("knock_doors_meta", null),
   campaigns: load("knock_campaigns", []),
   messages: load("knock_messages", []),
-  connections: load("knock_connections", { gmail: false, gcal: false, outlook: false, linkedin: false }),
+  connections: load("knock_connections", { google: false, outlook: false, linkedin: false }),
   autonomy: load("knock_autonomy", { review: true, followups: true, weekends: false, digest: true }),
   knocks: load("knock_left", 15),
   searchMode: load("knock_search_mode", "founders"),
@@ -44,6 +44,12 @@ const state = {
   trackerTab: "all",
   sourcing: false,
 };
+state.connections = {
+  google: Boolean(state.connections.google || state.connections.gmail || state.connections.gcal),
+  outlook: Boolean(state.connections.outlook),
+  linkedin: Boolean(state.connections.linkedin),
+};
+save("knock_connections", state.connections);
 const saveLive = () => {
   save("knock_doors", state.doors);
   save("knock_doors_meta", state.doorsMeta);
@@ -98,6 +104,44 @@ function esc(s) {
 }
 
 const firstName = () => (state.profile?.fullName || window.knockAuth?.user?.name || "there").split(" ")[0];
+const googleConnected = () => Boolean(state.connections.google);
+
+function saveConnections() {
+  save("knock_connections", state.connections);
+}
+
+function connectGoogle() {
+  const user = window.knockAuth?.user || {};
+  if ((window.knockAuth?.mode || "dev") !== "supabase" || !user.id || user.id === "dev") {
+    toast("Connect Google requires Supabase login. Configure Supabase, log in, then try again");
+    return;
+  }
+
+  const params = new URLSearchParams({
+    user_id: user.id,
+    user_email: user.email || "",
+    return_to: `${location.pathname || "/app/index.html"}#settings`,
+  });
+  location.href = `/api/google/connect?${params.toString()}`;
+}
+
+function handleGoogleReturn() {
+  const url = new URL(location.href);
+  const connected = url.searchParams.get("google") === "connected";
+  const error = url.searchParams.get("google_error");
+
+  if (connected) {
+    state.connections.google = true;
+    saveConnections();
+    toast("Google connected");
+  } else if (error) {
+    toast(`Google connect failed: ${esc(error)}`);
+  }
+
+  if (connected || error) {
+    history.replaceState(null, "", `${location.pathname}${location.hash || "#settings"}`);
+  }
+}
 
 /* ---------------- streak (real, based on days you actually showed up) ---------------- */
 function localDay(d) {
@@ -292,7 +336,7 @@ function renderDoorsQueue() {
     <div class="statgrid">
       <div class="statcard"><small>Doors found</small><div class="num">${doors.length}</div><span class="delta">searching as ${modeLabel(state.searchMode)}</span></div>
       <div class="statcard"><small>Average match</small><div class="num">${avgMatch}%</div><span class="delta">scored against your story</span></div>
-      <div class="statcard"><small>Knocks queued</small><div class="num">${state.messages.length}</div><span class="delta">${state.connections.gmail ? "ready to send" : "waiting on Gmail"}</span></div>
+      <div class="statcard"><small>Knocks queued</small><div class="num">${state.messages.length}</div><span class="delta">${googleConnected() ? "ready to send" : "waiting on Google"}</span></div>
       <div class="statcard"><small>Knocks left</small><div class="num">${state.knocks}</div><span class="delta">free plan · resets monthly</span></div>
     </div>
 
@@ -301,9 +345,9 @@ function renderDoorsQueue() {
       <div>${I.plane}</div>
       <div>
         <b>Campaign queued · ${campaign.selectedDoorIds.length} knock${campaign.selectedDoorIds.length === 1 ? "" : "s"}</b>
-        <p>Gmail sending is not connected yet, so nothing has been sent. Connect Gmail to send from your own inbox.</p>
+        <p>Connect Gmail and Calendar to send emails, detect replies, and schedule meetings.</p>
       </div>
-      <button class="btn btn--paper btn--sm" id="q-gmail">Connect Gmail</button>
+      <button class="btn btn--paper btn--sm" id="q-google">Connect Google</button>
     </div>` : ""}
 
     <div class="rowhead">
@@ -332,8 +376,7 @@ function renderDoorsQueue() {
     runSourcing();
   }));
   $("#resource", view).addEventListener("click", runSourcing);
-  $("#q-gmail", view)?.addEventListener("click", () =>
-    toast("Gmail OAuth is the next build step. Campaigns stay safely queued until then"));
+  $("#q-google", view)?.addEventListener("click", connectGoogle);
   $("#doors-pager", view)?.addEventListener("click", (e) => {
     const b = e.target.closest("[data-p]");
     if (!b || b.disabled) return;
@@ -416,7 +459,7 @@ async function launchCampaign() {
     state.knocks = Math.max(0, state.knocks - selected.length);
     state.selectedDoors = new Set();
     saveLive();
-    toast("Campaign queued. Gmail sending is not connected yet, so nothing was sent");
+    toast("Campaign queued. Connect Google to send from your own inbox");
     navigate();
   } catch (err) {
     toast(`Launch failed: ${esc(err.message)}`);
@@ -474,8 +517,7 @@ function renderPeople() {
    INBOX (+ Connections hub)
    ============================================================ */
 const CONNECTIONS = [
-  { id: "gmail", icn: "mail", name: "Gmail", sub: "sends from your real address" },
-  { id: "gcal", icn: "cal", name: "Google Calendar", sub: "auto-offers your free slots when they say yes" },
+  { id: "google", icn: "mail", name: "Google", sub: "Connect Gmail and Calendar to send emails, detect replies, and schedule meetings." },
   { id: "outlook", icn: "mail", name: "Outlook", sub: "school and work inboxes welcome" },
   { id: "linkedin", icn: "linkedin", name: "LinkedIn", sub: "DMs and connection notes, same voice" },
 ];
@@ -491,19 +533,24 @@ function openConnections() {
           <div><strong>${c.name}</strong><small>${state.connections[c.id] ? "Connected · " : ""}${c.sub}</small></div>
           ${state.connections[c.id]
             ? `<button class="btn btn--paper btn--sm end act-disconnect">Disconnect</button>`
-            : `<button class="btn btn--sm end act-connect">Connect</button>`}
+            : `<button class="btn btn--sm end act-connect">${c.id === "google" ? "Connect Google" : "Connect"}</button>`}
         </div>`).join("")}
     </div>
-    <p class="connlist__fine">Real OAuth (Gmail send, Calendar) is the next build step. These toggles track intent until then.</p>
+    <p class="connlist__fine">Google connects Gmail and Calendar. LinkedIn is next.</p>
     <div class="modal__actions"><button class="btn btn--ghost" id="m-close">Done</button></div>`);
   const setConn = (id, val) => {
     state.connections[id] = val;
-    save("knock_connections", state.connections);
+    saveConnections();
     toast(`${CONNECTIONS.find((c) => c.id === id).name} ${val ? "connected" : "disconnected"}`);
     openConnections();
   };
   $$(".act-connect", modal).forEach((b) =>
-    b.addEventListener("click", (e) => setConn(e.target.closest(".connrow").dataset.id, true)));
+    b.addEventListener("click", (e) => {
+      const id = e.target.closest(".connrow").dataset.id;
+      if (id === "google") return connectGoogle();
+      if (id === "linkedin") return toast("LinkedIn connect is next. This channel is ready for the next build");
+      setConn(id, true);
+    }));
   $$(".act-disconnect", modal).forEach((b) =>
     b.addEventListener("click", (e) => setConn(e.target.closest(".connrow").dataset.id, false)));
   $("#m-close", modal).addEventListener("click", closeModal);
@@ -522,14 +569,14 @@ function renderInbox() {
       <div class="ghost__icon">${I.mail}</div>
       <h2>No threads yet</h2>
       <p>${state.messages.length
-        ? `You have ${state.messages.length} knock${state.messages.length === 1 ? "" : "s"} queued. Connect Gmail and they'll send from your own address; replies land here.`
+        ? `You have ${state.messages.length} knock${state.messages.length === 1 ? "" : "s"} queued. Connect Gmail and Calendar to send emails, detect replies, and schedule meetings.`
         : "Launch your first campaign from the dashboard. When people reply, every thread shows up here, warmest first."}</p>
-      <button class="btn btn--accent" id="inbox-cta">${state.messages.length ? "Connect Gmail" : "Go to dashboard"}</button>
+      <button class="btn btn--accent" id="inbox-cta">${state.messages.length ? "Connect Google" : "Go to dashboard"}</button>
     </div>
   </div>`;
   $("#connections-btn", view).addEventListener("click", openConnections);
   $("#inbox-cta", view).addEventListener("click", () => {
-    if (state.messages.length) openConnections();
+    if (state.messages.length) connectGoogle();
     else location.hash = "dashboard";
   });
 }
@@ -538,7 +585,7 @@ function renderInbox() {
    TRACKER
    ============================================================ */
 const STAGES = [
-  { id: "queued", label: "Queued", hint: "Waiting on Gmail" },
+  { id: "queued", label: "Queued", hint: "Waiting on Google" },
   { id: "sent", label: "Sent", hint: "Knocked, waiting" },
   { id: "opened", label: "Opened", hint: "They're reading" },
   { id: "replied", label: "Replied", hint: "Door is open" },
@@ -660,10 +707,10 @@ function renderProfile() {
             <input type="text" id="skill-add" placeholder="+ add a skill" />
           </div>
         </div>
-        <div class="pcard">
+        <div class="pcard profile-extra">
           <h3>Anything else Scout should know</h3>
-          <textarea id="extra-ctx" rows="3" placeholder="Side projects, clubs, the things you nerd out about, who you most want to meet…">${esc(p.extraContext || "")}</textarea>
-          <div class="modal__actions" style="margin-top:.7rem"><button class="btn btn--sm" id="ctx-save">Save</button></div>
+          <textarea id="extra-ctx" rows="5" placeholder="Side projects, clubs, the things you nerd out about, who you most want to meet…">${esc(p.extraContext || "")}</textarea>
+          <div class="modal__actions"><button class="btn btn--sm" id="ctx-save">Save</button></div>
         </div>
       </div>
     </div>
@@ -840,12 +887,15 @@ function renderSettings() {
       </div>
       <div class="pcard">
         <h3>Connections</h3>
-        ${[["gmail", "mail", "Gmail", "sends from your real address"], ["gcal", "cal", "Google Calendar", "auto-offers your free slots"]].map(([id, icn, name, sub]) => `
+        ${[
+          ["google", "mail", "Google", "Connect Gmail and Calendar to send emails, detect replies, and schedule meetings."],
+          ["linkedin", "linkedin", "LinkedIn", "DMs and connection notes, same voice"],
+        ].map(([id, icn, name, sub]) => `
         <div class="setrow"><span class="ico">${I[icn]}</span><div><strong>${name}</strong><small>${state.connections[id] ? "Connected · " + sub : "Not connected. " + sub[0].toUpperCase() + sub.slice(1)}</small></div>
           ${state.connections[id]
             ? `<button class="btn btn--paper btn--sm end conn-off" data-id="${id}">Disconnect</button>`
-            : `<button class="btn btn--sm end conn-on" data-id="${id}">Connect</button>`}</div>`).join("")}
-        <div class="setrow"><span class="ico">${I.plug}</span><div><strong>All channels</strong><small>Outlook, LinkedIn and more</small></div>
+            : `<button class="btn btn--sm end conn-on" data-id="${id}">${id === "google" ? "Connect Google" : "Connect"}</button>`}</div>`).join("")}
+        <div class="setrow"><span class="ico">${I.plug}</span><div><strong>All channels</strong><small>Outlook and more</small></div>
           <button class="btn btn--paper btn--sm end" id="set-connections">Manage</button></div>
       </div>
       <div class="pcard">
@@ -887,13 +937,16 @@ function renderSettings() {
   });
   const setConn = (id, val) => {
     state.connections[id] = val;
-    save("knock_connections", state.connections);
-    toast(val
-      ? `${id === "gmail" ? "Gmail" : "Google Calendar"} connected (OAuth send scopes are the next build step)`
-      : `${id === "gmail" ? "Gmail" : "Google Calendar"} disconnected`);
+    saveConnections();
+    const label = id === "google" ? "Google" : "LinkedIn";
+    toast(val ? `${label} connected` : `${label} disconnected`);
     renderSettings();
   };
-  $$(".conn-on", view).forEach((b) => b.addEventListener("click", () => setConn(b.dataset.id, true)));
+  $$(".conn-on", view).forEach((b) => b.addEventListener("click", () => {
+    if (b.dataset.id === "google") return connectGoogle();
+    if (b.dataset.id === "linkedin") return toast("LinkedIn connect is next. This channel is ready for the next build");
+    setConn(b.dataset.id, true);
+  }));
   $$(".conn-off", view).forEach((b) => b.addEventListener("click", () => setConn(b.dataset.id, false)));
 
   fetch("/api/test-apollo").then((r) => r.json()).then((d) => {
@@ -1301,6 +1354,7 @@ $("#acct-logout").addEventListener("click", () => window.knockAuth.signOut());
   if (/access_token|refresh_token|error_description/.test(location.hash)) {
     history.replaceState(null, "", location.pathname + "#dashboard");
   }
+  handleGoogleReturn();
   initAccount();
   navigate();
   if (!state.profile) openOnboarding(1);

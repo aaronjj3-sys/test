@@ -1,5 +1,5 @@
 /* POST /api/campaigns/create — queue a campaign from approved doors.
-   No emails are sent here. Gmail sending is a separate, later integration.
+   No emails are sent here. Google sending is a separate integration.
    Without a database configured, the queued campaign is returned for the
    client to persist; with Supabase env vars set, this is where it inserts. */
 
@@ -37,7 +37,7 @@ export default function handler(req, res) {
     messages,
     meta: {
       sent: false,
-      note: "Campaign queued. Gmail sending is not connected yet, so nothing was sent.",
+      note: "Campaign queued. Connect Google to send from your own inbox.",
       persisted: "client", // becomes "supabase" once the DB is wired
     },
   });

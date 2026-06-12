@@ -23,6 +23,8 @@ const apiRoutes = [
   "api/test-apollo.js",
   "api/campaigns/create.js",
   "api/dashboard/doors.js",
+  "api/google/callback.js",
+  "api/google/connect.js",
   "api/sourcing/apollo.js",
   "api/sourcing/mock.js",
 ];
@@ -40,6 +42,7 @@ const appStaticFiles = [
   "app.css",
   "app.js",
   "auth.js",
+  "data.js",
   "config.example.js",
 ];
 
