@@ -47,10 +47,23 @@ async function persistMessage(userId, message, fields) {
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
-  const { userId, message, scheduleAt } = req.body || {};
+  const { userId, scheduleAt } = req.body || {};
+  const rawMessage = req.body?.message || {};
+  const message = {
+    ...rawMessage,
+    to: String(rawMessage.to || "").trim(),
+    subject: String(rawMessage.subject || "").trim(),
+    body: String(rawMessage.body || "").trim(),
+  };
   if (!userId) return res.status(400).json({ error: "userId is required" });
-  if (!message?.to || !message?.subject || !message?.body) {
-    return res.status(400).json({ error: "message.to, message.subject and message.body are required" });
+  const missing = ["to", "subject", "body"].filter((field) => !message[field]);
+  if (missing.length) {
+    return res.status(400).json({
+      ok: false,
+      error: "missing_message_fields",
+      missing,
+      message: `Email is missing ${missing.map((field) => `message.${field}`).join(", ")}.`,
+    });
   }
 
   const connection = await getGoogleConnection(userId);

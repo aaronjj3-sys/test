@@ -75,7 +75,7 @@ member id) for personalization; DMs would go through their Partner program.
 Set `ANTHROPIC_API_KEY` in `.env.local` / Vercel and two things upgrade
 automatically (both have deterministic fallbacks without it):
 - Resume parsing: school/degree/experience/skills extracted by
-  `claude-haiku-4-5` with typo correction, instead of regex heuristics.
+  `claude-haiku-4-5-20251001` with typo correction, instead of regex heuristics.
 - Writing-style learning: your writing samples are analyzed into a style
   profile that shapes every draft.
 

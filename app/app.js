@@ -73,6 +73,24 @@ const saveLive = () => {
 };
 const doorById = (id) => (state.doors || []).find((d) => d.id === id);
 const msgById = (id) => state.messages.find((m) => m.id === id);
+function messageDoor(m) {
+  const live = doorById(m?.doorId);
+  if (live) return live;
+  if (m?.doorSnapshot) return m.doorSnapshot;
+  if (!m?.apolloPersonId) return null;
+  return {
+    id: m.doorId || m.id,
+    apolloPersonId: m.apolloPersonId,
+    name: m.name || m.toName || "",
+    firstName: (m.name || m.toName || "").split(" ")[0] || "",
+    title: m.title || "",
+    companyName: m.company || m.companyName || "",
+    companyDomain: m.companyDomain || "",
+    email: m.to || "",
+    emailStatus: m.emailStatus || "",
+    draft: m.draft || null,
+  };
+}
 const latestMsgForDoor = (doorId) => {
   for (let i = state.messages.length - 1; i >= 0; i--) {
     if (state.messages[i].doorId === doorId) return state.messages[i];
@@ -1007,6 +1025,10 @@ async function runLaunch(selected, scheduleAt) {
         subject: noEmDash(m.subject),
         body: noEmDash(m.body),
         name: d?.name, title: d?.title, company: d?.companyName, companyDomain: d?.companyDomain,
+        doorSnapshot: d || m.doorSnapshot || null,
+        apolloPersonId: d?.apolloPersonId || m.apolloPersonId || "",
+        emailStatus: d?.emailStatus || m.emailStatus || "",
+        draft: d?.draft || m.draft || null,
         to: m.to || m.toEmail || d?.email || "",
         toName: m.toName || d?.name || "",
         scheduleAt: scheduleAt || m.scheduledAt || null,
@@ -1093,6 +1115,9 @@ async function ensureMessageReady(m, d) {
   if (d) {
     m.to = m.to || d.email || "";
     m.toName = m.toName || d.name || "";
+    m.apolloPersonId = m.apolloPersonId || d.apolloPersonId || "";
+    m.emailStatus = m.emailStatus || d.emailStatus || "";
+    m.doorSnapshot = m.doorSnapshot || d;
     m.subject = noEmDash(m.subject || d.draft?.subject || "quick question");
     m.body = noEmDash(m.body || d.draft?.body || d.draft?.preview || "");
   }
@@ -1114,9 +1139,17 @@ async function ensureMessageReady(m, d) {
     } catch { /* deterministic draft route fallback may still be unavailable locally */ }
   }
 
-  if (!m.to && d?.apolloPersonId) {
+  const enrichTarget = d || (m.apolloPersonId ? {
+    id: m.doorId || m.id,
+    apolloPersonId: m.apolloPersonId,
+    email: m.to || "",
+    emailStatus: m.emailStatus || "",
+  } : null);
+
+  if (!m.to && enrichTarget?.apolloPersonId) {
     setMsgStatus(m, "drafting");
-    m.to = await enrichDoorForEmail(d);
+    m.to = await enrichDoorForEmail(enrichTarget);
+    m.emailStatus = enrichTarget.emailStatus || m.emailStatus || "";
   }
 
   m.subject = noEmDash(m.subject || "quick question");
@@ -1129,9 +1162,9 @@ async function ensureMessageReady(m, d) {
 }
 
 async function processSingleSend(m) {
-  const d = doorById(m.doorId);
+  const d = messageDoor(m);
   /* 1 · drafting: upgrade template previews into a real AI draft */
-  if (!d?.draft || d.draft.source !== "openai") {
+  if (d && (!d.draft || d.draft.source !== "openai")) {
     setMsgStatus(m, "drafting");
     try {
       const res = await fetch("/api/knock/draft", {
@@ -1195,7 +1228,7 @@ async function processSingleSend(m) {
       toast(`Monthly knock limit reached${data.limit ? ` (${data.limit})` : ""}. Go Pro for 200 knocks a month`);
       return "stop";
     }
-    m.error = data.error || `Send failed (${res.status})`;
+    m.error = data.message || data.error || `Send failed (${res.status})`;
     setMsgStatus(m, "failed");
     return "failed";
   } catch (err) {
@@ -1466,6 +1499,16 @@ function openSuggestedReply(m) {
     const btn = $("#sr-send");
     btn.disabled = true; btn.textContent = "Sending…";
     try {
+      const d = messageDoor(m);
+      if (!m.to && d?.email) m.to = d.email;
+      if (!m.to && d?.apolloPersonId) {
+        btn.textContent = "Finding email...";
+        m.to = await enrichDoorForEmail(d);
+      }
+      const replySubject = noEmDash($("#sr-subject").value.trim());
+      const replyBody = noEmDash($("#sr-body").value.trim());
+      if (!m.to) throw new Error("No verified email found. Apollo enrichment did not return one.");
+      if (!replySubject || !replyBody) throw new Error("Reply needs a subject and body.");
       const res = await fetch("/api/gmail/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1474,15 +1517,15 @@ function openSuggestedReply(m) {
           /* same message id so the server threads the reply onto the Gmail thread */
           message: {
             id: m.id, doorId: m.doorId, campaignId: m.campaignId,
-            to: m.to || "", toName: m.name || "",
-            subject: noEmDash($("#sr-subject").value.trim()),
-            body: noEmDash($("#sr-body").value.trim()),
+            to: m.to, toName: m.name || d?.name || "",
+            subject: replySubject,
+            body: replyBody,
           },
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 412 || data.error === "google_not_connected") throw new Error("Google isn't connected");
-      if (!res.ok || !data.ok) throw new Error(data.error || `Send failed (${res.status})`);
+      if (!res.ok || !data.ok) throw new Error(data.message || data.error || `Send failed (${res.status})`);
       m.status = "replied";
       m.replySent = true;
       saveLive(); updateMessageRow(m); updateChrome();

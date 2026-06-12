@@ -1,9 +1,9 @@
 /* POST /api/profile/parse-resume
    Input:  { fileName, contentBase64 }  (or { text } if already extracted)
    Output: { ok, parsed: {...facts}, textExtracted, source: "openai"|"claude"|"deterministic" }
-   OpenAI (MODELS.draft, structured JSON) is tried first when CHATGPT_API_KEY
-   is set, then Claude (legacy path) when ANTHROPIC_API_KEY is set, then
-   deterministic extraction. Never stores the file server-side. */
+   Claude Haiku is tried first when ANTHROPIC_API_KEY is set, then OpenAI when
+   CHATGPT_API_KEY is set, then deterministic extraction. Never stores the file
+   server-side. */
 
 import { extractText } from "../../lib/resume/extract.js";
 import { extractResumeFacts } from "../../lib/resume/facts.js";
@@ -42,7 +42,16 @@ export default async function handler(req, res) {
 
   let parsed = null;
   let source = "deterministic";
-  if (openaiConfigured()) {
+  if (claudeConfigured()) {
+    parsed = await claudeJSON({
+      system: "You parse resumes into structured profile data for a cold-outreach product. Be faithful to the document: keep the person's numbers and phrasing in wins and bullets, fix obvious typos in proper nouns (school and company names), and never invent facts.",
+      prompt: `Parse this resume:\n\n${text}`,
+      schema: RESUME_SCHEMA,
+      maxTokens: 2500,
+    });
+    if (parsed) source = "claude";
+  }
+  if (!parsed && openaiConfigured()) {
     parsed = await openaiJSON({
       system: resumeSystem(),
       prompt: `Parse this resume:\n\n${text}`,
@@ -52,15 +61,6 @@ export default async function handler(req, res) {
       effort: "low",
     });
     if (parsed) source = "openai";
-  }
-  if (!parsed && claudeConfigured()) {
-    parsed = await claudeJSON({
-      system: "You parse resumes into structured profile data for a cold-outreach product. Be faithful to the document: keep the person's numbers and phrasing in wins and bullets, fix obvious typos in proper nouns (school and company names), and never invent facts.",
-      prompt: `Parse this resume:\n\n${text}`,
-      schema: RESUME_SCHEMA,
-      maxTokens: 2500,
-    });
-    if (parsed) source = "claude";
   }
 
   const merged = parsed

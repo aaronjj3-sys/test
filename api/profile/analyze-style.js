@@ -2,8 +2,8 @@
    Input:  { samples: [string], story? }
    Output: { ok, styleProfile, source: "openai"|"claude"|"deterministic" }
    Learns the user's writing voice from their own samples. Deterministic
-   metrics always run; OpenAI refines first when CHATGPT_API_KEY is set,
-   then Claude (legacy path) when ANTHROPIC_API_KEY is set. */
+   metrics always run; Claude refines first when ANTHROPIC_API_KEY is set,
+   then OpenAI when CHATGPT_API_KEY is set. */
 
 import { analyzeStyleDeterministic } from "../../lib/knock/style.js";
 import { claudeJSON, claudeConfigured, STYLE_SCHEMA } from "../../lib/knock/claude.js";
@@ -26,7 +26,16 @@ export default async function handler(req, res) {
 
   let refined = null;
   let refinedSource = null;
-  if (openaiConfigured()) {
+  if (claudeConfigured()) {
+    refined = await claudeJSON({
+      system: "You analyze writing samples to capture someone's natural voice so an outreach tool can draft emails that sound like them. Describe how they actually write, not how they should.",
+      prompt: `Writing samples from one person:\n\n${corpus}`,
+      schema: STYLE_SCHEMA,
+      maxTokens: 800,
+    });
+    if (refined) refinedSource = "claude";
+  }
+  if (!refined && openaiConfigured()) {
     const { system, prompt } = stylePrompt(corpus);
     refined = await openaiJSON({
       system,
@@ -37,15 +46,6 @@ export default async function handler(req, res) {
       effort: "low",
     });
     if (refined) refinedSource = "openai";
-  }
-  if (!refined && claudeConfigured()) {
-    refined = await claudeJSON({
-      system: "You analyze writing samples to capture someone's natural voice so an outreach tool can draft emails that sound like them. Describe how they actually write, not how they should.",
-      prompt: `Writing samples from one person:\n\n${corpus}`,
-      schema: STYLE_SCHEMA,
-      maxTokens: 800,
-    });
-    if (refined) refinedSource = "claude";
   }
 
   const styleProfile = refined
