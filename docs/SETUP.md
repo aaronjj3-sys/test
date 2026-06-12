@@ -96,7 +96,9 @@ The integration is implemented (`lib/gmail/`, `api/gmail/send.js`,
    `gmail.send`, `gmail.readonly`, `gmail.compose`, `calendar.events`,
    `calendar.readonly` — separate from login.
 3. Add `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` to `.env.local`, and run
-   `supabase/migrations/003_sending.sql` in the SQL editor.
+   `supabase/migrations/003_sending.sql`, `004_app_state.sql`, and
+   `005_attachments.sql` (resume/file attachments + imported conversations)
+   in the SQL editor.
 4. Set `CRON_SECRET` in Vercel env. Reply detection + follow-ups run via
    polling: the app syncs live whenever it's open (`/api/gmail/sync`), and
    the Vercel cron (`/api/cron/monitor`, see vercel.json) covers off-hours —

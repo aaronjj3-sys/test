@@ -1,12 +1,15 @@
 /* POST /api/gmail/send — send (or schedule) one outreach email from the
    user's own Gmail. Body:
-   { userId, message: { id?, doorId?, campaignId?, to, toName?, subject, body }, scheduleAt? }
+   { userId,
+     message: { id?, doorId?, campaignId?, to, toName?, subject, body,
+                attachmentIds? },   // user_files ids: resume + up to 5 extras
+     scheduleAt? }
 
    412 google_not_connected · 402 knock_limit_reached · 502 on Gmail failure. */
 
 import { randomUUID } from "node:crypto";
 import { supabaseConfigured, sbSelect, sbInsert, sbUpdate } from "../../lib/supabase/admin.js";
-import { getGoogleConnection, sendEmail } from "../../lib/gmail/client.js";
+import { getGoogleConnection, sendEmail, loadAttachments } from "../../lib/gmail/client.js";
 import { monthlySendCount, planLimit } from "../../lib/gmail/sendQueue.js";
 
 function validUuid(value) {
@@ -24,24 +27,33 @@ async function persistMessage(userId, message, fields) {
     updated_at: new Date().toISOString(),
     ...fields,
   };
-  if (validUuid(message.id)) {
-    const updated = await sbUpdate("campaign_messages", { id: message.id, user_id: userId }, base);
-    if (updated?.length) return message.id;
-  }
-  const row = {
-    id: validUuid(message.id) ? message.id : randomUUID(),
-    user_id: userId,
-    campaign_id: validUuid(message.campaignId) ? message.campaignId : null,
-    door_id: validUuid(message.doorId) ? message.doorId : null,
-    created_at: new Date().toISOString(),
-    ...base,
+  const attempt = async (data) => {
+    if (validUuid(message.id)) {
+      const updated = await sbUpdate("campaign_messages", { id: message.id, user_id: userId }, data);
+      if (updated?.length) return message.id;
+    }
+    const row = {
+      id: validUuid(message.id) ? message.id : randomUUID(),
+      user_id: userId,
+      campaign_id: validUuid(message.campaignId) ? message.campaignId : null,
+      door_id: validUuid(message.doorId) ? message.doorId : null,
+      created_at: new Date().toISOString(),
+      ...data,
+    };
+    let inserted = await sbInsert("campaign_messages", [row]);
+    if (!inserted) {
+      /* door/campaign may only exist client-side — retry without the FKs */
+      inserted = await sbInsert("campaign_messages", [{ ...row, door_id: null, campaign_id: null }]);
+    }
+    return inserted?.[0]?.id || null;
   };
-  let inserted = await sbInsert("campaign_messages", [row]);
-  if (!inserted) {
-    /* door/campaign may only exist client-side — retry without the FKs */
-    inserted = await sbInsert("campaign_messages", [{ ...row, door_id: null, campaign_id: null }]);
+  let id = await attempt(base);
+  if (!id && "attachments" in base) {
+    /* migration 005 (attachments column) may not be applied yet */
+    const { attachments, ...withoutAttachments } = base;
+    id = await attempt(withoutAttachments);
   }
-  return inserted?.[0]?.id || null;
+  return id;
 }
 
 export default async function handler(req, res) {
@@ -54,6 +66,9 @@ export default async function handler(req, res) {
     to: String(rawMessage.to || "").trim(),
     subject: String(rawMessage.subject || "").trim(),
     body: String(rawMessage.body || "").trim(),
+    attachmentIds: (Array.isArray(rawMessage.attachmentIds) ? rawMessage.attachmentIds : [])
+      .filter(validUuid)
+      .slice(0, 6),
   };
   if (!userId) return res.status(400).json({ error: "userId is required" });
   const missing = ["to", "subject", "body"].filter((field) => !message[field]);
@@ -82,25 +97,33 @@ export default async function handler(req, res) {
     }
   }
 
-  /* schedule for later instead of sending now */
+  /* schedule for later instead of sending now: attachments persist on the
+     row so the monitor attaches them when the scheduled send fires */
   if (scheduleAt && Date.parse(scheduleAt) > Date.now()) {
     let messageId = message.id || null;
     if (dbReady) {
       messageId = await persistMessage(userId, message, {
         status: "scheduled",
         scheduled_at: new Date(Date.parse(scheduleAt)).toISOString(),
+        attachments: message.attachmentIds.length
+          ? message.attachmentIds.map((fileId) => ({ fileId }))
+          : null,
       });
     }
     return res.status(200).json({ ok: true, status: "scheduled", messageId, scheduledAt: scheduleAt });
   }
 
   try {
+    const attachments = dbReady && message.attachmentIds.length
+      ? await loadAttachments(userId, message.attachmentIds)
+      : [];
     const sent = await sendEmail({
       userId,
       to: message.to,
       toName: message.toName,
       subject: message.subject,
       body: message.body,
+      attachments,
     });
 
     let messageId = message.id || null;
@@ -110,6 +133,9 @@ export default async function handler(req, res) {
         sent_at: new Date().toISOString(),
         gmail_message_id: sent.gmailMessageId,
         gmail_thread_id: sent.threadId,
+        attachments: message.attachmentIds.length
+          ? message.attachmentIds.map((fileId) => ({ fileId }))
+          : null,
       });
       if (messageId) {
         await sbInsert("email_events", [

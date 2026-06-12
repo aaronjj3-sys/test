@@ -14,6 +14,23 @@ import { resumeSystem, RESUME_V2_JSON_SCHEMA } from "../../lib/knock/prompts.js"
 const MAX_FILE_BYTES = 6 * 1024 * 1024;
 const MAX_TEXT_CHARS = 24_000;
 
+/* education must never come back empty when the resume has an Education
+   section: fall back to that section's items if the model skipped the array */
+function ensureEducation(parsed) {
+  if (!parsed) return parsed;
+  if (Array.isArray(parsed.education) && parsed.education.length) return parsed;
+  const eduSection = (parsed.sections || []).find((s) => /education/i.test(s?.title || ""));
+  parsed.education = (eduSection?.items || [])
+    .map((it) => ({
+      school: it.org || it.role || "",
+      degree: it.org && it.role ? it.role : "",
+      when: it.when || "",
+      bullets: it.bullets || [],
+    }))
+    .filter((e) => e.school || e.degree);
+  return parsed;
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   const { fileName = "", contentBase64, text: rawText } = req.body || {};
@@ -53,7 +70,7 @@ export default async function handler(req, res) {
         textExtracted: false,
         documentParsed: true,
         source: "claude_pdf",
-        parsed,
+        parsed: ensureEducation(parsed),
         note: "",
       });
     }
@@ -103,6 +120,7 @@ export default async function handler(req, res) {
       skills: [...new Set([...(parsed.skills || []), ...deterministic.skills])].slice(0, 14),
     }
     : { fullName: "", extraContext: "", ...deterministic };
+  ensureEducation(merged);
 
   return res.status(200).json({
     ok: true,

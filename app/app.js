@@ -250,6 +250,101 @@ const noEmDash = (s) => String(s ?? "").replace(/\s+—\s+/g, ", ").replace(/—
 /* the authenticated user id (Supabase uuid, or "dev" in dev mode) */
 const userId = () => window.knockAuth?.user?.id || "dev";
 
+/* ---------------- user files: resume + email attachments ----------------
+   Stored server-side (user_files table via /api/files) so the actual bytes
+   can be attached to Gmail sends. The client keeps metadata only. */
+const MAX_EXTRA_ATTACHMENTS = 5;
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+state.userFiles = null; /* null = not loaded yet */
+
+const filesApiAvailable = () => userId() !== "dev";
+
+async function loadUserFiles(force = false) {
+  if (!filesApiAvailable()) { state.userFiles = []; return state.userFiles; }
+  if (state.userFiles && !force) return state.userFiles;
+  try {
+    const res = await fetch("/api/files", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: userId(), action: "list" }),
+    });
+    const data = await res.json().catch(() => ({}));
+    state.userFiles = data.ok ? data.files || [] : [];
+  } catch {
+    state.userFiles = state.userFiles || [];
+  }
+  return state.userFiles;
+}
+
+const resumeFile = () => (state.userFiles || []).find((f) => f.kind === "resume") || null;
+const attachmentFiles = () => (state.userFiles || []).filter((f) => f.kind === "attachment");
+
+async function uploadUserFile(file, kind = "attachment") {
+  if (!file) return null;
+  if (!filesApiAvailable()) {
+    toast("Sign in with a real account to store attachments");
+    return null;
+  }
+  if (file.size > MAX_ATTACHMENT_BYTES) {
+    toast(`${file.name} is over the 5MB attachment limit`);
+    return null;
+  }
+  try {
+    const res = await fetch("/api/files", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId: userId(),
+        action: "upload",
+        kind,
+        name: file.name,
+        mime: file.type || "application/octet-stream",
+        dataBase64: await fileToBase64(file),
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      toast(data.error || "Could not save the file");
+      return null;
+    }
+    state.userFiles = state.userFiles || [];
+    if (kind === "resume") state.userFiles = state.userFiles.filter((f) => f.kind !== "resume");
+    state.userFiles.push(data.file);
+    return data.file;
+  } catch {
+    toast("Could not save the file (network)");
+    return null;
+  }
+}
+
+async function deleteUserFile(id) {
+  if (!filesApiAvailable()) return false;
+  try {
+    const res = await fetch("/api/files", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: userId(), action: "delete", id }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (data.ok) state.userFiles = (state.userFiles || []).filter((f) => f.id !== id);
+    return Boolean(data.ok);
+  } catch {
+    return false;
+  }
+}
+
+/* which user_files ride along with a given door's knock */
+function attachmentIdsForDoor(d) {
+  const attach = d?.attach || {};
+  const wantResume = attach.resume !== undefined
+    ? attach.resume
+    : Boolean(state.sendPrefs?.attachResume);
+  const ids = [...(attach.fileIds || [])];
+  const resume = resumeFile();
+  if (wantResume && resume) ids.unshift(resume.id);
+  return [...new Set(ids)].slice(0, MAX_EXTRA_ATTACHMENTS + 1);
+}
+
 /* ---------------- message status vocabulary ---------------- */
 const STATUS_UI = {
   drafting: ["Drafting", "drafting"],
@@ -642,36 +737,51 @@ function pager(total, page, idPrefix) {
 /* ---- background pagination: when the user hits the last loaded UI page,
    quietly pull the next Apollo page and grow the pager ---- */
 async function prefetchNextDoorsPage() {
-  const meta = state.doorsMeta || {};
   if (state.prefetchingDoors || !state.profile || !(state.doors || []).length) return;
-  if (meta.hasMore !== true) return;
+  if ((state.doorsMeta || {}).hasMore !== true) return;
   state.prefetchingDoors = true;
   refreshDoorsPager();
-  const nextPage = (meta.apolloPage || Math.ceil(state.doors.length / PAGE_SIZE)) + 1;
   try {
-    const res = await fetch("/api/sourcing/apollo", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ profile: state.profile, searchMode: state.searchMode, mode: state.searchMode, filters: state.searchFilters, page: nextPage, limit: PAGE_SIZE }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "prefetch failed");
-    const seenIds = new Set(state.doors.map((d) => d.id));
-    const seenApollo = new Set(state.doors.map((d) => d.apolloPersonId).filter(Boolean));
-    const fresh = (data.doors || []).filter((d) =>
-      !seenIds.has(d.id) && !(d.apolloPersonId && seenApollo.has(d.apolloPersonId)));
-    state.doors.push(...fresh);
-    state.doorsMeta = {
-      ...meta,
-      ...data.meta,
-      apolloPage: nextPage,
-      hasMore: data.meta?.hasMore === true && fresh.length > 0,
-    };
-    noteApolloSearch(data.meta);
-    saveLive();
+    /* keep pulling until something new lands (dedupe can eat whole pages) or
+       Apollo is exhausted — "next page" must always find more if more exist */
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const meta = state.doorsMeta || {};
+      if (meta.hasMore !== true) break;
+      const nextPage = (meta.apolloPage || Math.ceil(state.doors.length / PAGE_SIZE)) + 1;
+      const body = {
+        profile: state.profile, searchMode: state.searchMode, mode: state.searchMode,
+        filters: state.searchFilters, limit: PAGE_SIZE,
+      };
+      /* the server walks search plans via an opaque cursor; fall back to plain
+         page numbers for older responses and mock mode */
+      if (meta.cursor) body.cursor = meta.cursor;
+      else body.page = nextPage;
+      const res = await fetch("/api/sourcing/apollo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "prefetch failed");
+      const seenIds = new Set(state.doors.map((d) => d.id));
+      const seenApollo = new Set(state.doors.map((d) => d.apolloPersonId).filter(Boolean));
+      const fresh = (data.doors || []).filter((d) =>
+        !seenIds.has(d.id) && !(d.apolloPersonId && seenApollo.has(d.apolloPersonId)));
+      state.doors.push(...fresh);
+      state.doorsMeta = {
+        ...meta,
+        ...data.meta,
+        apolloPage: nextPage,
+        hasMore: data.meta?.hasMore === true,
+        cursor: data.meta?.cursor || null,
+      };
+      noteApolloSearch(data.meta);
+      saveLive();
+      if (fresh.length) break; /* got new people; stop until the user pages on */
+    }
   } catch {
     /* network hiccup or API offline: stop trying this session, retry on next sourcing */
-    state.doorsMeta = { ...meta, hasMore: false };
+    state.doorsMeta = { ...(state.doorsMeta || {}), hasMore: false };
   } finally {
     state.prefetchingDoors = false;
     refreshDoorsPager();
@@ -845,7 +955,7 @@ function renderDoorsQueue() {
       <div class="statcard"><small>Knocks left</small><div class="num">${state.knocks}</div><span class="delta">${state.plan === "pro" ? "pro" : "free"} plan · resets monthly</span></div>
     </div>
 
-    ${state.messages.length ? `<div class="qbanner" id="send-strip">${sendStripHTML()}</div>` : ""}
+    ${state.messages.length && !stripDismissed() ? `<div class="qbanner" id="send-strip">${sendStripHTML()}</div>` : ""}
 
     <div class="rowhead">
       <h2>Your launch queue</h2>
@@ -853,6 +963,7 @@ function renderDoorsQueue() {
       <div class="rowhead__actions">
         ${SEARCH_MODES_UI.map(([id, label]) =>
           `<button class="pill ${state.searchMode === id ? "is-on" : ""}" data-mode="${id}">${label}</button>`).join("")}
+        <button class="btn btn--paper btn--sm" id="add-contact" title="Track someone you found yourself">+ Add contact</button>
         <button class="btn btn--sm" id="launch" disabled>Approve &amp; launch</button>
       </div>
     </div>
@@ -868,6 +979,7 @@ function renderDoorsQueue() {
   wireDoorsTable(slice, queuedIds);
   wireFilterBar();
   wireSendStrip();
+  $("#add-contact", view)?.addEventListener("click", openAddContact);
 
   $$(".rowhead .pill", view).forEach((p) => p.addEventListener("click", () => {
     state.searchMode = p.dataset.mode;
@@ -907,8 +1019,25 @@ function wireDoorsTable(slice, queuedIds) {
   launch?.addEventListener("click", launchCampaign);
 }
 
-/* ---- live send progress strip (dashboard) ---- */
+/* ---- live send progress strip (dashboard) ----
+   The strip is dismissable: acting on its CTA (or the ×) hides it until the
+   pipeline state actually changes, then it reappears with the news. */
+function stripSig() {
+  const counts = {};
+  for (const m of state.messages) counts[m.status] = (counts[m.status] || 0) + 1;
+  return Object.entries(counts).sort().map(([k, v]) => `${k}:${v}`).join("|");
+}
+const stripDismissed = () => load("knock_strip_dismissed", "") === stripSig();
+function dismissSendStrip() {
+  save("knock_strip_dismissed", stripSig());
+  $("#send-strip", view)?.remove();
+}
+
 function sendStripHTML() {
+  return `${sendStripBody()}<button class="qbanner__x" id="ss-dismiss" title="Dismiss">&times;</button>`;
+}
+
+function sendStripBody() {
   const msgs = state.messages;
   const total = msgs.length;
   const by = (...sts) => msgs.filter((m) => sts.includes(m.status)).length;
@@ -972,14 +1101,108 @@ function wireSendStrip() {
   if (!strip || strip.dataset.wired) return;
   strip.dataset.wired = "1";
   strip.addEventListener("click", (e) => {
-    if (e.target.closest("#ss-google")) connectGoogle();
-    if (e.target.closest("#ss-upgrade")) openUpgrade();
+    if (e.target.closest("#ss-google")) return connectGoogle();
+    if (e.target.closest("#ss-upgrade")) return openUpgrade();
+    if (e.target.closest("#ss-dismiss")) return dismissSendStrip();
+    /* following the CTA acknowledges the notice: hide it until news arrives */
+    if (e.target.closest("a[href='#tracker']")) save("knock_strip_dismissed", stripSig());
   });
 }
 
 function refreshSendStrip() {
   const strip = $("#send-strip", view);
-  if (strip) strip.innerHTML = sendStripHTML();
+  if (strip) {
+    if (stripDismissed()) strip.remove();
+    else strip.innerHTML = sendStripHTML();
+    return;
+  }
+  /* dismissed earlier but the pipeline moved: bring the strip back with the news */
+  const anchor = $(".statgrid", view);
+  if (anchor && state.messages.length && !stripDismissed()) {
+    const holder = document.createElement("div");
+    holder.className = "qbanner";
+    holder.id = "send-strip";
+    holder.innerHTML = sendStripHTML();
+    anchor.insertAdjacentElement("afterend", holder);
+    wireSendStrip();
+  }
+}
+
+/* attachments block shared by the review modal: resume toggle + saved files
+   + upload. Selections persist per door on d.attach = { resume, fileIds }. */
+function attachBlockHTML(d) {
+  const resume = resumeFile();
+  const attach = d.attach || {};
+  const resumeOn = attach.resume !== undefined ? attach.resume : Boolean(state.sendPrefs?.attachResume);
+  const selected = new Set(attach.fileIds || []);
+  const extras = attachmentFiles();
+  return `
+    <label>Attachments</label>
+    <div class="attachbox" id="attachbox">
+      <label class="attachrow ${resume ? "" : "is-off"}">
+        <input type="checkbox" id="att-resume" ${resume && resumeOn ? "checked" : ""} ${resume ? "" : "disabled"}>
+        <span class="attachrow__ico">${I.doc}</span>
+        <span class="attachrow__name">${resume ? `My resume · ${esc(resume.name)}` : "My resume"}</span>
+        ${resume ? "" : `<small>Upload your resume on the Profile page first</small>`}
+      </label>
+      ${extras.map((f) => `
+        <label class="attachrow">
+          <input type="checkbox" class="att-file" data-id="${f.id}" ${selected.has(f.id) ? "checked" : ""}>
+          <span class="attachrow__ico">${I.doc}</span>
+          <span class="attachrow__name">${esc(f.name)}</span>
+          <small>${Math.max(1, Math.round((f.sizeBytes || 0) / 1024))} KB</small>
+        </label>`).join("")}
+      <div class="attachadd" id="att-drop">
+        <button type="button" class="pill" id="att-add">+ Add attachment</button>
+        <small>or drag &amp; drop · up to ${MAX_EXTRA_ATTACHMENTS} extra files, 5MB each</small>
+        <input type="file" id="att-input" multiple hidden>
+      </div>
+    </div>`;
+}
+
+function readAttachSelection() {
+  return {
+    resume: Boolean($("#att-resume", modal)?.checked),
+    fileIds: $$(".att-file", modal).filter((c) => c.checked).map((c) => c.dataset.id),
+  };
+}
+
+function wireAttachBlock(d, rerender) {
+  const saveSel = () => { d.attach = readAttachSelection(); saveLive(); };
+  $("#att-resume", modal)?.addEventListener("change", saveSel);
+  $$(".att-file", modal).forEach((c) => c.addEventListener("change", saveSel));
+  const input = $("#att-input", modal);
+  const addFiles = async (files) => {
+    const room = MAX_EXTRA_ATTACHMENTS - attachmentFiles().length;
+    const list = [...(files || [])].slice(0, Math.max(0, room));
+    if (!list.length && (files || []).length) {
+      toast(`You already have ${MAX_EXTRA_ATTACHMENTS} attachments saved. Remove one in Settings first`);
+      return;
+    }
+    let added = 0;
+    for (const f of list) {
+      const saved = await uploadUserFile(f, "attachment");
+      if (saved) {
+        d.attach = d.attach || { resume: Boolean(state.sendPrefs?.attachResume), fileIds: [] };
+        d.attach.fileIds = [...new Set([...(d.attach.fileIds || []), saved.id])];
+        added++;
+      }
+    }
+    if (added) {
+      saveLive();
+      toast(`${added} attachment${added === 1 ? "" : "s"} added`);
+      rerender();
+    }
+  };
+  $("#att-add", modal)?.addEventListener("click", () => input.click());
+  input?.addEventListener("change", () => addFiles(input.files));
+  const drop = $("#att-drop", modal);
+  ["dragover", "dragenter"].forEach((ev) => drop?.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("is-drag"); }));
+  ["dragleave", "drop"].forEach((ev) => drop?.addEventListener(ev, (e) => {
+    e.preventDefault();
+    drop.classList.remove("is-drag");
+    if (ev === "drop") addFiles(e.dataTransfer.files);
+  }));
 }
 
 function openDoorDraft(d) {
@@ -991,6 +1214,7 @@ function openDoorDraft(d) {
     <label>Email</label>
     <div class="pcard" style="white-space:pre-wrap;font-size:.88rem;line-height:1.55" contenteditable="true" id="dd-body">${esc(d.draft?.body || d.draft?.preview || "")}</div>
     <p class="connlist__fine">Edit the draft directly. Your changes are saved when you close.</p>
+    ${attachBlockHTML(d)}
     <div class="modal__actions">
       <button class="btn btn--premium" id="dd-improve">${icon("spark")} Improve with AI <span class="prochip">Pro</span></button>
       <button class="btn btn--paper" id="dd-undo" hidden>Undo</button>
@@ -1008,7 +1232,21 @@ function openDoorDraft(d) {
       d.draft = { ...(d.draft || {}), subject: subject || d.draft?.subject, body: text || d.draft?.body };
       saveLive();
     }
+    d.attach = readAttachSelection();
+    saveLive();
   };
+  /* swap just the attachments box (keeps any in-progress body edits intact) */
+  const repaintAttach = () => {
+    const box = $("#attachbox", modal);
+    if (!box || modalScrim.hidden) return;
+    const holder = document.createElement("div");
+    holder.innerHTML = attachBlockHTML(d);
+    box.replaceWith(holder.querySelector("#attachbox"));
+    wireAttachBlock(d, repaintAttach);
+  };
+  wireAttachBlock(d, repaintAttach);
+  /* file metadata loads in the background on first open */
+  if (state.userFiles === null) loadUserFiles().then(repaintAttach);
   $("#dd-improve").addEventListener("click", async () => {
     const btn = $("#dd-improve");
     const prev = { subject: $("#dd-subject").value, body: $("#dd-body").innerText };
@@ -1055,16 +1293,143 @@ function openDoorDraft(d) {
   });
 }
 
-/* ---- sending preferences: asked once, on the first launch ---- */
+/* ---- add your own contact: compose in Knock, or import a conversation
+   you already started from Gmail so the tracker/inbox follow it ---- */
+function openAddContact() {
+  openModal(`
+    <h2>Add your own contact</h2>
+    <p class="sub">Found someone yourself? Track them here: send through Knock, or pull in an email you already sent.</p>
+    <div class="chips-select chips-select--stack ac-mode">
+      <button type="button" class="pill is-on" data-v="compose"><b>Compose in Knock</b> · Scout drafts it, you review and send from your Gmail</button>
+      <button type="button" class="pill" data-v="import"><b>I already emailed them</b> · pull the Gmail conversation into the tracker</button>
+    </div>
+    <label>Name</label><input type="text" id="ac-name" placeholder="Jordan Rivers">
+    <label>Email</label><input type="email" id="ac-email" placeholder="jordan@company.com">
+    <div class="formrow">
+      <div><label>Company (optional)</label><input type="text" id="ac-company" placeholder="Acme Capital"></div>
+      <div><label>Role (optional)</label><input type="text" id="ac-title" placeholder="Partner"></div>
+    </div>
+    <p class="connlist__fine" id="ac-hint">Scout drafts a knock in your voice. You review it before anything sends.</p>
+    <div class="modal__actions">
+      <button class="btn btn--ghost" id="m-cancel">Cancel</button>
+      <button class="btn btn--accent" id="ac-go">Add contact</button>
+    </div>`);
+  const hint = $("#ac-hint", modal);
+  const mode = () => $(".ac-mode .pill.is-on", modal)?.dataset.v || "compose";
+  $$(".ac-mode .pill", modal).forEach((p) => p.addEventListener("click", () => {
+    $$(".ac-mode .pill", modal).forEach((x) => x.classList.toggle("is-on", x === p));
+    hint.textContent = p.dataset.v === "import"
+      ? "Scout searches your Gmail for the conversation with this address, then tracks replies and follow-ups from here."
+      : "Scout drafts a knock in your voice. You review it before anything sends.";
+    $("#ac-go", modal).textContent = p.dataset.v === "import" ? "Find & track conversation" : "Add contact";
+  }));
+  $("#m-cancel").addEventListener("click", closeModal);
+  $("#ac-go").addEventListener("click", async () => {
+    const name = $("#ac-name", modal).value.trim();
+    const email = $("#ac-email", modal).value.trim();
+    const company = $("#ac-company", modal).value.trim();
+    const title = $("#ac-title", modal).value.trim();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return obError("#ac-email", "A valid email address is required.");
+
+    if (mode() === "import") {
+      if (userId() === "dev") return obError("#ac-email", "Sign in with a real account to import from Gmail.");
+      if (!googleConnected()) return obError("#ac-email", "Connect Google in Settings first so Scout can read the thread.");
+      const btn = $("#ac-go", modal);
+      btn.disabled = true; btn.textContent = "Searching your Gmail…";
+      try {
+        const res = await fetch("/api/gmail/import-thread", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId: userId(), email, name, company, title }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 404 || data.error === "no_thread_found") {
+          throw new Error(data.message || "No Gmail conversation with that address was found.");
+        }
+        if (res.status === 412 || data.error === "google_not_connected") throw new Error("Google isn't connected.");
+        if (!res.ok || !data.ok) throw new Error(data.error || `Import failed (${res.status})`);
+        const msg = {
+          ...data.message,
+          name: data.message.name || name || email,
+          company: data.message.company || company,
+          title: data.message.title || title,
+          threadMessages: data.threadMessages || [],
+          unread: data.message.status === "replied",
+          history: [{ at: data.message.sentAt, type: "imported", label: "Imported from Gmail" }],
+        };
+        state.messages.push(msg);
+        state.inboxSelectedId = msg.id;
+        save("knock_inbox_selected", msg.id);
+        saveLive();
+        closeModal();
+        toast(`Conversation with ${msg.name} imported. Scout is watching the thread`);
+        location.hash = "inbox";
+      } catch (err) {
+        btn.disabled = false; btn.textContent = "Find & track conversation";
+        obError("#ac-email", err.message);
+      }
+      return;
+    }
+
+    if (!name) return obError("#ac-name", "Add their name so Scout can write to them.");
+    const d = {
+      id: `manual_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      source: "manual",
+      status: "found",
+      name,
+      firstName: name.split(" ")[0],
+      title: title || undefined,
+      companyName: company || undefined,
+      email,
+      emailStatus: "user_provided",
+      matchScore: 100,
+      matchReasons: ["Added by you"],
+      signals: {},
+      draft: null,
+    };
+    state.doors = state.doors || [];
+    state.doors.unshift(d);
+    state.selectedDoors.add(d.id);
+    state.doorsPage = 0;
+    saveLive();
+    closeModal();
+    toast(`${name} added to your queue. Scout is drafting the knock…`);
+    /* draft with AI, then open review; an empty draft still opens for manual writing */
+    try {
+      const res = await fetch("/api/knock/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profile: state.profile, door: d, tone: state.profile?.tone, styleProfile: state.profile?.styleProfile }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok && data.draft) {
+        d.draft = { ...data.draft, subject: noEmDash(data.draft.subject), body: noEmDash(data.draft.body), source: data.source };
+        saveLive();
+      }
+    } catch { /* manual draft is fine */ }
+    if ((location.hash.replace("#", "") || "dashboard") === "dashboard") renderDoorsQueue();
+    openDoorDraft(d);
+  });
+}
+
+/* ---- sending preferences: confirmed before every launch unless the user
+   opts out ("don't ask again" → it lives in Settings → Sending preferences) ---- */
 function openSendPrefs(onDone) {
+  if (state.userFiles === null) loadUserFiles().then(() => {
+    const note = $("#sp-resume-note", modal);
+    if (note) note.textContent = resumeFile()
+      ? `On file: ${resumeFile().name}`
+      : "No resume on file yet. Upload it on the Profile page.";
+  });
   const prefs = state.sendPrefs || { mode: "review", channel: "gmail", attachResume: false };
+  const resume = resumeFile();
   const channelRow = (id, name, hint, available) => `
     <button type="button" class="pill sp-channel ${prefs.channel === id ? "is-on" : ""}" data-v="${id}" ${available ? "" : 'data-off="1"'}>
       ${name}${available ? "" : " · not connected"}
     </button>`;
   openModal(`
     <h2>How should Knock send for you?</h2>
-    <p class="sub">Set it once; change it anytime in Settings.</p>
+    <p class="sub">Confirmed before every launch. Change it anytime in Settings → Sending preferences.</p>
     <label>Sending mode</label>
     <div class="chips-select chips-select--stack sp-mode">
       <button type="button" class="pill ${prefs.mode === "review" ? "is-on" : ""}" data-v="review"><b>Review every send</b> · you approve, edit, and add attachments before anything goes out</button>
@@ -1079,9 +1444,11 @@ function openSendPrefs(onDone) {
     ${googleConnected() ? "" : `<p class="connlist__fine">Gmail isn't connected yet. Knocks stay safely queued until you connect it in Settings.</p>`}
     <label>Attachments</label>
     <div class="setrow" style="border:none;padding:.3rem 0">
-      <div><strong>Attach my resume</strong><small>Adds your resume to every first knock</small></div>
+      <div><strong>Attach my resume</strong><small id="sp-resume-note">${resume ? `On file: ${esc(resume.name)}` : "Adds your resume to every first knock"}</small></div>
       <label class="switch end"><input type="checkbox" id="sp-resume" ${prefs.attachResume ? "checked" : ""}><i></i></label>
     </div>
+    <label class="sp-skip"><input type="checkbox" id="sp-skip" ${prefs.skipPrompt ? "checked" : ""}>
+      Don't show this before every launch <small>· you can always edit it in Settings → Sending preferences</small></label>
     <div class="modal__actions">
       <button class="btn btn--accent" id="sp-save">Save &amp; continue</button>
     </div>`);
@@ -1091,15 +1458,22 @@ function openSendPrefs(onDone) {
     $$(".sp-chan .pill", modal).forEach((x) => x.classList.toggle("is-on", x === p));
   }));
   $("#sp-save").addEventListener("click", () => {
+    const skipPrompt = $("#sp-skip").checked;
     state.sendPrefs = {
       mode: $(".sp-mode .pill.is-on", modal)?.dataset.v || "review",
       channel: $(".sp-chan .pill.is-on", modal)?.dataset.v || "queue",
       attachResume: $("#sp-resume").checked,
+      skipPrompt,
     };
+    /* the mode drives the agent for real: review gates replies + follow-ups */
+    state.autonomy.review = state.sendPrefs.mode !== "auto";
+    save("knock_autonomy", state.autonomy);
     save("knock_send_prefs", state.sendPrefs);
     schedulePersistProfile();
     closeModal();
-    toast("Sending preferences saved");
+    toast(skipPrompt
+      ? "Saved. Find these anytime in Settings → Sending preferences"
+      : "Sending preferences saved");
     onDone && onDone();
   });
 }
@@ -1107,8 +1481,15 @@ function openSendPrefs(onDone) {
 function launchCampaign() {
   const selected = (state.doors || []).filter((d) => state.selectedDoors.has(d.id));
   if (!selected.length) return;
-  /* first send: let them choose automation level, channel, attachments */
-  if (!state.sendPrefs) return openSendPrefs(launchCampaign);
+  /* confirm automation level, channel, and attachments before each launch
+     (skippable via "don't show again"; then it lives in Settings) */
+  if (!state.sendPrefs || !state.sendPrefs.skipPrompt) {
+    return openSendPrefs(() => launchCampaignStage2(selected));
+  }
+  launchCampaignStage2(selected);
+}
+
+function launchCampaignStage2(selected) {
   /* knock limits: free 15/mo, pro 200/mo. Block over-approving up front. */
   if (selected.length > state.knocks) {
     openModal(`
@@ -1126,28 +1507,131 @@ function launchCampaign() {
   openLaunchReview(selected);
 }
 
+/* ---- Knock-styled date & time picker (replaces the browser default) ----
+   mountKdt(container) renders a display field + popover calendar and exposes
+   getValue(): Date | null. Knock paper/ink styling, no native widgets. */
+const KDT_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const KDT_DOW = ["S", "M", "T", "W", "T", "F", "S"];
+
+function mountKdt(container) {
+  const now = new Date();
+  const st = { y: now.getFullYear(), mo: now.getMonth(), day: null, h: 9, min: 0, open: false };
+
+  const sel = () => st.day === null ? null : new Date(st.y, st.mo, st.day, st.h, st.min);
+  const fmt = () => {
+    const d = sel();
+    return d
+      ? d.toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+      : "Send now";
+  };
+
+  const render = () => {
+    const first = new Date(st.y, st.mo, 1).getDay();
+    const daysIn = new Date(st.y, st.mo + 1, 0).getDate();
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const cells = [];
+    for (let i = 0; i < first; i++) cells.push("<i></i>");
+    for (let d = 1; d <= daysIn; d++) {
+      const dt = new Date(st.y, st.mo, d);
+      const past = dt < today;
+      const isToday = dt.getTime() === today.getTime();
+      const on = st.day === d;
+      cells.push(`<button type="button" class="kdt__day ${on ? "is-on" : ""} ${isToday ? "is-today" : ""}" data-d="${d}" ${past ? "disabled" : ""}>${d}</button>`);
+    }
+    const h12 = ((st.h + 11) % 12) + 1;
+    container.innerHTML = `
+      <button type="button" class="kdt__display ${st.day !== null ? "is-set" : ""}" id="kdt-display">
+        ${icon("cal")} <span>${esc(fmt())}</span>${st.day !== null ? '<b class="kdt__clearmini" title="Clear">&times;</b>' : ""}
+      </button>
+      <div class="kdt__pop" ${st.open ? "" : "hidden"}>
+        <div class="kdt__head">
+          <button type="button" class="kdt__nav" data-nav="-1">‹</button>
+          <b>${KDT_MONTHS[st.mo]} ${st.y}</b>
+          <button type="button" class="kdt__nav" data-nav="1">›</button>
+        </div>
+        <div class="kdt__dow">${KDT_DOW.map((d) => `<span>${d}</span>`).join("")}</div>
+        <div class="kdt__grid">${cells.join("")}</div>
+        <div class="kdt__time">
+          <span class="kdt__timelabel">at</span>
+          <select class="kdt__sel" data-t="h">${Array.from({ length: 12 }, (_, i) => `<option value="${i + 1}" ${h12 === i + 1 ? "selected" : ""}>${i + 1}</option>`).join("")}</select>
+          <span class="kdt__colon">:</span>
+          <select class="kdt__sel" data-t="m">${[0, 15, 30, 45].map((m) => `<option value="${m}" ${st.min === m ? "selected" : ""}>${String(m).padStart(2, "0")}</option>`).join("")}</select>
+          <div class="kdt__ampm">
+            <button type="button" class="${st.h < 12 ? "is-on" : ""}" data-ap="am">AM</button>
+            <button type="button" class="${st.h >= 12 ? "is-on" : ""}" data-ap="pm">PM</button>
+          </div>
+        </div>
+        <div class="kdt__foot">
+          <button type="button" class="kdt__link" data-act="clear">Clear · send now</button>
+          <button type="button" class="btn btn--accent btn--sm" data-act="done">Done</button>
+        </div>
+      </div>`;
+    wire();
+  };
+
+  const wire = () => {
+    $("#kdt-display", container).addEventListener("click", (e) => {
+      if (e.target.closest(".kdt__clearmini")) { st.day = null; st.open = false; render(); return; }
+      st.open = !st.open;
+      render();
+    });
+    $$(".kdt__nav", container).forEach((b) => b.addEventListener("click", () => {
+      st.mo += Number(b.dataset.nav);
+      if (st.mo < 0) { st.mo = 11; st.y--; }
+      if (st.mo > 11) { st.mo = 0; st.y++; }
+      render();
+    }));
+    $$(".kdt__day", container).forEach((b) => b.addEventListener("click", () => {
+      st.day = Number(b.dataset.d);
+      render();
+    }));
+    $$(".kdt__sel", container).forEach((s) => s.addEventListener("change", () => {
+      if (s.dataset.t === "h") {
+        const h12 = Number(s.value);
+        st.h = (st.h >= 12 ? 12 : 0) + (h12 % 12);
+      } else st.min = Number(s.value);
+      if (st.day === null) st.day = Math.max(now.getDate(), 1);
+      render();
+    }));
+    $$(".kdt__ampm button", container).forEach((b) => b.addEventListener("click", () => {
+      st.h = b.dataset.ap === "pm" ? (st.h % 12) + 12 : st.h % 12;
+      if (st.day === null) st.day = now.getDate();
+      render();
+    }));
+    container.querySelector('[data-act="clear"]').addEventListener("click", () => { st.day = null; st.open = false; render(); });
+    container.querySelector('[data-act="done"]').addEventListener("click", () => { st.open = false; render(); });
+  };
+
+  render();
+  return { getValue: sel };
+}
+
 /* approve modal: confirm the batch + optional "Send later" schedule */
 function openLaunchReview(selected) {
   const n = selected.length;
+  const resume = resumeFile();
+  const attachNote = state.sendPrefs?.attachResume
+    ? (resume ? `Your resume (${esc(resume.name)}) rides along with every knock. ` : "Resume attach is on, but no resume is on file yet, upload it on the Profile page. ")
+    : "";
   openModal(`
     <h2>Approve &amp; launch ${n} knock${n === 1 ? "" : "s"}</h2>
     <p class="sub">Scout finalizes each draft in your voice, then sends from your Gmail one by one. You'll see every status live. ${state.knocks} knock${state.knocks === 1 ? "" : "s"} left this month.</p>
     ${googleConnected() ? "" : `<p class="connlist__fine">Google isn't connected yet, so these will wait safely as "Connect Google" until you connect it.</p>`}
     <label>Send later (optional)</label>
-    <input type="datetime-local" id="lc-when">
-    <p class="connlist__fine">Leave empty to send now. Pick a time and Gmail delivers them then.</p>
+    <div class="kdt" id="lc-kdt"></div>
+    <p class="connlist__fine">${attachNote}Leave the time empty to send now; pick one and Gmail delivers them then.</p>
     <div class="modal__actions">
       <button class="btn btn--ghost" id="m-cancel">Cancel</button>
       <button class="btn btn--accent" id="lc-go">${googleConnected() ? "Launch" : "Queue knocks"}</button>
     </div>`);
+  const kdt = mountKdt($("#lc-kdt", modal));
   $("#m-cancel").addEventListener("click", closeModal);
   $("#lc-go").addEventListener("click", () => {
-    const raw = $("#lc-when").value;
+    const when = kdt.getValue();
     let scheduleAt = null;
-    if (raw) {
-      const when = new Date(raw);
+    if (when) {
       if (Number.isNaN(when.getTime()) || when.getTime() < Date.now()) {
-        return obError("#lc-when", "Pick a time in the future, or clear it to send now.");
+        return obError("#lc-kdt", "Pick a time in the future, or clear it to send now.");
       }
       scheduleAt = when.toISOString();
     }
@@ -1184,9 +1668,12 @@ async function runLaunch(selected, scheduleAt) {
     }
     state.selectedDoors = new Set();
     saveLive();
-    toast(googleConnected()
-      ? `Campaign approved. Scout is sending ${selected.length} knock${selected.length === 1 ? "" : "s"} now`
-      : "Campaign queued. Connect Google and Scout sends the moment you do");
+    const holdChannel = (state.sendPrefs?.channel || "gmail") !== "gmail";
+    toast(holdChannel
+      ? "Campaign queued and held, per your sending preferences. Switch the channel to Gmail to send"
+      : googleConnected()
+        ? `Campaign approved. Scout is sending ${selected.length} knock${selected.length === 1 ? "" : "s"} now`
+        : "Campaign queued. Connect Google and Scout sends the moment you do");
     navigate();
     processSendQueue();
   } catch (err) {
@@ -1214,6 +1701,13 @@ function setMsgStatus(m, status) {
 
 async function processSendQueue() {
   if (sendRunActive) return;
+  /* sending preference says hold: knocks stay safely queued on purpose */
+  const channel = state.sendPrefs?.channel || "gmail";
+  if (channel === "queue") return;
+  if (channel === "linkedin") {
+    /* LinkedIn delivery isn't live yet; keep knocks parked, never lost */
+    return;
+  }
   /* no Google: park everything visibly instead of a dead "queued" */
   if (!googleConnected()) {
     let parked = 0;
@@ -1352,6 +1846,7 @@ async function processSingleSend(m) {
           id: m.id, doorId: m.doorId, campaignId: m.campaignId,
           to: m.to, toName: m.toName || m.name || d?.name || "",
           subject: noEmDash(m.subject), body: noEmDash(m.body),
+          attachmentIds: m.attachmentIds || attachmentIdsForDoor(d),
         },
         scheduleAt: m.scheduleAt || undefined,
       }),
@@ -1471,22 +1966,42 @@ function openConnections() {
   $("#m-close", modal).addEventListener("click", closeModal);
 }
 
+/* a thread's most recent activity: latest inbound/outbound mail, else updatedAt */
+function threadLastActivity(m) {
+  const dates = (m.threadMessages || []).map((t) => Date.parse(t.date) || 0);
+  return Math.max(Date.parse(m.updatedAt || m.createdAt) || 0, ...dates, 0);
+}
+
+/* the left-rail tag only flags what needs attention; plain "sent" is implied */
+function threadTag(m) {
+  if (m.unread) return `<span class="warmtag warmtag--new">new reply</span>`;
+  if (m.status === "needs_review") return `<span class="warmtag">reply drafted - review</span>`;
+  if (m.status === "replied" && m.suggestedReply && !m.replySent) return `<span class="warmtag">draft ready</span>`;
+  if (m.status === "meeting") return `<span class="warmtag warmtag--ok">meeting booked</span>`;
+  if (m.status === "failed") return `<span class="warmtag">failed</span>`;
+  if (m.status === "followup_sent") return `<span class="warmtag warmtag--dim">followed up</span>`;
+  return "";
+}
+
 function renderInbox() {
-  const messages = [...state.messages].sort((a, b) => {
-    const priority = (m) => m.status === "needs_review" ? 0 : m.status === "replied" ? 1 : m.status === "sent" ? 2 : 3;
-    return priority(a) - priority(b) || (Date.parse(b.updatedAt || b.createdAt) || 0) - (Date.parse(a.updatedAt || a.createdAt) || 0);
-  });
+  /* new replies first (lighted blue), then most recent activity downward */
+  const messages = [...state.messages].sort((a, b) =>
+    (b.unread ? 1 : 0) - (a.unread ? 1 : 0) || threadLastActivity(b) - threadLastActivity(a));
   const selected = messages.find((m) => m.id === state.inboxSelectedId) || messages[0];
   if (selected) {
     state.inboxSelectedId = selected.id;
     save("knock_inbox_selected", selected.id);
   }
 
+  /* the conversation: real mail only, no status/version noise. When synced
+     thread messages carry isFromMe we render the true thread; before the
+     first sync we show the original knock from our side. */
   const threadMessages = selected?.threadMessages || [];
-  const history = selected ? [
-    { at: selected.createdAt, type: "created", label: "Queued", body: selected.body || selected.draftPreview || "" },
-    ...(selected.history || []),
-  ].filter((h) => h?.label || h?.body) : [];
+  const threadHasMine = threadMessages.some((tm) => tm.isFromMe);
+  const snippet = (m) => {
+    const last = (m.threadMessages || []).filter((t) => !t.isFromMe).slice(-1)[0];
+    return (last?.body || m.body || "").replace(/\s+/g, " ").slice(0, 80);
+  };
 
   view.innerHTML = `<div class="viewwrap">
     <div class="vh vh--row">
@@ -1500,32 +2015,33 @@ function renderInbox() {
     <div class="inbox">
       <div class="threadlist">
         ${messages.map((m) => `
-          <button class="thread-item ${selected?.id === m.id ? "is-open" : ""}" data-id="${m.id}">
-            <span class="thread-item__row"><strong>${esc(m.name || "Unknown")}</strong><time>${new Date(m.updatedAt || m.createdAt).toLocaleDateString()}</time></span>
+          <button class="thread-item ${selected?.id === m.id ? "is-open" : ""} ${m.unread ? "is-new" : ""}" data-id="${m.id}">
+            <span class="thread-item__row">
+              ${m.unread ? '<i class="dot-unread"></i>' : ""}
+              <strong>${esc(m.name || m.toName || "Unknown")}</strong>
+              <time>${new Date(threadLastActivity(m) || Date.now()).toLocaleDateString([], { month: "short", day: "numeric" })}</time>
+            </span>
             <span class="subj">${esc(m.subject || "quick question")}</span>
-            <span class="warmtag">${esc((m.status || "queued").replaceAll("_", " "))}${m.suggestedReply ? " - draft ready" : ""}</span>
+            <span class="snippet">${esc(snippet(m))}</span>
+            ${threadTag(m)}
           </button>`).join("")}
       </div>
       <div class="threadview">
         <div class="threadview__head">
           <h3>${esc(selected?.subject || "Select a thread")}</h3>
-          <small>${esc(selected?.name || "")}${selected?.company ? " - " + esc(selected.company) : ""} ${selected?.to ? " - " + esc(selected.to) : ""}</small>
+          <small>${esc(selected?.name || "")}${selected?.company ? " - " + esc(selected.company) : ""}${selected?.to ? " - " + esc(selected.to) : ""}</small>
         </div>
         <div class="threadview__msgs">
-          ${selected?.body ? `<div class="msg msg--you"><time>Original knock</time>${esc(selected.body)}</div>` : ""}
+          ${!threadHasMine && selected?.body ? `<div class="msg msg--you"><time>You - original knock</time>${esc(selected.body)}</div>` : ""}
           ${threadMessages.map((tm) => `
             <div class="msg ${tm.isFromMe ? "msg--you" : "msg--them"}">
-              <time>${esc(tm.isFromMe ? "You" : tm.from || "Them")} ${tm.date ? " - " + new Date(tm.date).toLocaleString() : ""}</time>
+              <time>${esc(tm.isFromMe ? "You" : tm.from || selected?.name || "Them")}${tm.date ? " - " + new Date(tm.date).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}</time>
               ${esc(tm.body || tm.subject || "")}
             </div>`).join("")}
-          ${selected?.suggestedReply ? `<div class="msg msg--draft"><time>Scout draft</time><b>${esc(selected.suggestedReply.subject || "")}</b><br>${esc(selected.suggestedReply.body || "")}</div>` : ""}
-          ${history.length ? `<div class="thread-history">
-            <h4>Version history</h4>
-            ${history.slice(-8).map((h) => `<div><b>${esc(h.type || "update")}</b><span>${h.at ? new Date(h.at).toLocaleString() : ""}</span><p>${esc(h.label || "")}</p></div>`).join("")}
-          </div>` : ""}
+          ${selected?.suggestedReply ? `<div class="msg msg--draft"><time>Scout drafted this reply for you</time><b>${esc(selected.suggestedReply.subject || "")}</b><br>${esc(selected.suggestedReply.body || "")}</div>` : ""}
         </div>
         <div class="threadview__reply">
-          ${selected?.suggestedReply ? `<button class="btn btn--accent msg-reply" data-id="${selected.id}">View suggested reply</button>` : `<button class="btn btn--paper" id="open-tracker">Open tracker</button>`}
+          ${selected?.suggestedReply ? `<button class="btn btn--accent msg-reply" data-id="${selected.id}">Review &amp; send reply</button>` : `<button class="btn btn--paper" id="open-tracker">Open tracker</button>`}
         </div>
       </div>
     </div>` : `
@@ -1539,9 +2055,13 @@ function renderInbox() {
   $("#connections-btn", view).addEventListener("click", openConnections);
   $$(".thread-item", view).forEach((b) => b.addEventListener("click", () => {
     state.inboxSelectedId = b.dataset.id;
+    const m = msgById(b.dataset.id);
+    if (m?.unread) { m.unread = false; saveLive(); }
     save("knock_inbox_selected", state.inboxSelectedId);
     renderInbox();
   }));
+  /* opening the selected thread clears its unread highlight */
+  if (selected?.unread) { selected.unread = false; saveLive(); }
   $(".msg-reply", view)?.addEventListener("click", (e) => openSuggestedReply(msgById(e.target.dataset.id)));
   $("#open-tracker", view)?.addEventListener("click", () => { location.hash = "tracker"; });
   $("#inbox-cta", view)?.addEventListener("click", () => { location.hash = "dashboard"; });
@@ -1576,9 +2096,13 @@ function messageActions(m) {
   return "";
 }
 
+/* statuses with a real conversation behind them open in the inbox on click */
+const TRACKER_LINKABLE = new Set(["sent", "followup_sent", "opened", "replied", "needs_review", "meeting", "scheduled"]);
+
 function trackerRow(m) {
+  const linkable = TRACKER_LINKABLE.has(m.status);
   return `
-    <tr data-msg-id="${m.id}">
+    <tr data-msg-id="${m.id}" class="${linkable ? "is-link" : ""}" ${linkable ? 'title="Open this conversation in the inbox"' : ""}>
       <td><div class="cell-who"><div><strong>${esc(m.name || "Unknown")}</strong><small>${esc(m.title || "")}</small></div></div></td>
       <td>${m.company ? `<div class="cell-co">${logo(m.company, m.companyDomain, 26)}<span>${esc(m.company)}</span></div>` : "·"}</td>
       <td class="cell-draft"><b>${esc(m.subject)}</b>
@@ -1650,7 +2174,16 @@ function renderTracker() {
   /* one delegated listener so rows can be re-rendered in place */
   $("#tracker-table", view)?.addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-id]");
-    if (!btn) return;
+    if (!btn) {
+      /* plain row click: jump to the matching inbox conversation */
+      const row = e.target.closest("tr.is-link[data-msg-id]");
+      if (row && !e.target.closest("a")) {
+        state.inboxSelectedId = row.dataset.msgId;
+        save("knock_inbox_selected", state.inboxSelectedId);
+        location.hash = "inbox";
+      }
+      return;
+    }
     const m = msgById(btn.dataset.id);
     if (!m) return;
     if (btn.classList.contains("msg-pause")) {
@@ -1779,12 +2312,21 @@ async function runGmailSync() {
       const m = msgById(u.messageId);
       if (!m) continue;
       if (u.status && u.status !== m.status) {
-        if (u.status === "replied" || u.status === "needs_review") replies++;
+        if (u.status === "replied" || u.status === "needs_review") {
+          replies++;
+          m.unread = true; /* lights the thread blue + floats it to the top */
+        }
         m.status = u.status;
       }
       if (u.classification) m.classification = u.classification;
       if (u.suggestedReply) m.suggestedReply = u.suggestedReply;
-      if (u.threadMessages) m.threadMessages = u.threadMessages;
+      if (u.threadMessages) {
+        const inboundBefore = (m.threadMessages || []).filter((t) => !t.isFromMe).length;
+        const inboundNow = u.threadMessages.filter((t) => !t.isFromMe).length;
+        if (inboundNow > inboundBefore) m.unread = true;
+        m.threadMessages = u.threadMessages;
+        m.updatedAt = new Date().toISOString();
+      }
       if (u.meetLink) m.meetLink = u.meetLink;
       if (u.followupNumber != null) m.followupNumber = u.followupNumber;
       if (u.suggestedReply) {
@@ -1798,6 +2340,7 @@ async function runGmailSync() {
     if ((data.updates || []).length) {
       saveLive();
       updateChrome();
+      if ((location.hash.replace("#", "") || "dashboard") === "inbox") renderInbox();
       if (replies) toast(`${replies} new repl${replies === 1 ? "y" : "ies"}. Scout drafted responses for review`);
     }
   } catch { /* offline; next tick will retry */ }
@@ -1941,8 +2484,24 @@ function mergeParsedProfile(p, parsed) {
   if (Array.isArray(parsed.experience) && parsed.experience.length) {
     p.experience = parsed.experience;
   }
+  if (Array.isArray(parsed.sections) && parsed.sections.length) {
+    /* the resume's own section structure (Education, Professional Experience,
+       Leadership & Extracurriculars, …) drives the Resume highlights card */
+    p.sections = parsed.sections;
+    p.resumeSections = parsed.sections;
+  }
   if (Array.isArray(parsed.education) && parsed.education.length) {
     p.education = parsed.education;
+  } else if (Array.isArray(p.sections)) {
+    const eduSection = p.sections.find((s) => /education/i.test(s?.title || ""));
+    if (eduSection?.items?.length && !(p.education || []).length) {
+      p.education = eduSection.items.map((it) => ({
+        school: it.org || it.role || "",
+        degree: it.org && it.role ? it.role : "",
+        when: it.when || "",
+        bullets: it.bullets || [],
+      })).filter((e) => e.school || e.degree);
+    }
   }
   if (!p.location && parsed.location) p.location = parsed.location;
   if (!p.fullName && parsed.fullName) p.fullName = parsed.fullName;
@@ -1954,33 +2513,78 @@ function mergeParsedProfile(p, parsed) {
   return bits.join(", ");
 }
 
+/* resume sections, normalized: the resume's own headings drive the card */
 function profileSections(p) {
   const sections = Array.isArray(p.sections) && p.sections.length
     ? p.sections
     : Array.isArray(p.resumeSections) && p.resumeSections.length
       ? p.resumeSections
       : [];
+  return sections.map((s) => ({
+    title: s.title || "Resume",
+    items: (s.items || []).filter((item) => item?.role || item?.org || item?.bullets?.length),
+  }));
+}
+
+/* ALL-CAPS resume headings ("PROFESSIONAL EXPERIENCE") → "Professional experience" */
+function sectionTitleCase(t) {
+  const s = String(t || "Resume").trim();
+  return s === s.toUpperCase() ? s.charAt(0) + s.slice(1).toLowerCase() : s;
+}
+
+/* keep the scorer/prompt-facing experience list in sync with section edits */
+function syncDerivedFromSections(p) {
+  if (!Array.isArray(p.sections) || !p.sections.length) return;
+  p.resumeSections = p.sections;
+  const work = p.sections.filter((s) => /experience|professional|work|employment/i.test(s.title || ""));
+  const pool = (work.length ? work : p.sections.filter((s) => !/education/i.test(s.title || "")))
+    .flatMap((s) => s.items || [])
+    .filter((it) => it?.role || it?.org);
+  if (pool.length) p.experience = pool.slice(0, 8);
+}
+
+/* the resume's own non-education sections (Professional Experience,
+   Leadership & Extracurriculars, Projects, …), each editable per row.
+   Falls back to a single "Experience & leadership" block from p.experience
+   for profiles parsed before sections existed. */
+function rhItemHTML(x, attrs, editCls, delCls) {
+  return `
+    <div class="xp__item">
+      <strong>${esc(x.role || x.org || "Resume item")}</strong>
+      <span class="when">${esc(x.role ? x.org || "" : "")}${x.when ? ((x.role && x.org) ? " · " : "") + esc(x.when) : ""}</span>
+      ${(x.bullets || []).length ? `<ul>${(x.bullets || []).map((b) => `<li>${esc(b)}</li>`).join("")}</ul>` : ""}
+      <div class="xp__actions">
+        <button class="edit ${editCls}" ${attrs} title="Edit this entry">${icon("pen", "icn icn--xs")} Edit</button>
+        <button class="edit ${delCls}" ${attrs}>Remove</button>
+      </div>
+    </div>`;
+}
+
+function rhCustomSections(p) {
+  /* edits write to p.sections by index, so render the raw array directly */
+  if (!(p.sections || []).length && (p.resumeSections || []).length) p.sections = p.resumeSections;
+  const sections = (p.sections || [])
+    .map((s, si) => ({ title: s.title || "Resume", items: s.items || [], si }))
+    .filter((s) => !/education/i.test(s.title));
   if (sections.length) {
-    return sections
-      .map((s) => ({
-        title: s.title || "Resume",
-        items: (s.items || []).filter((item) => item?.role || item?.org || item?.bullets?.length),
-      }))
-      .filter((s) => s.items.length);
+    return sections.map((s) => `
+      <div class="rh-sect">
+        <h4 class="rh-sub">${esc(sectionTitleCase(s.title))} <button class="edit sec-add" data-si="${s.si}">+ Add</button></h4>
+        <div class="xp">
+          ${s.items.map((x, ii) => rhItemHTML(x, `data-si="${s.si}" data-ii="${ii}"`, "sec-edit", "sec-del")).join("")}
+          ${s.items.length === 0 ? `<p class="empty-line">Nothing in this section yet.</p>` : ""}
+        </div>
+      </div>`).join("");
   }
-  return (p.experience || []).length ? [{ title: "Experience", items: p.experience }] : [];
-}
-
-function sectionItemCount(sections) {
-  return sections.reduce((sum, s) => sum + (s.items || []).length, 0);
-}
-
-function renderSectionItem(x) {
-  return `<div class="xp__item">
-    <strong>${esc(x.role || x.org || "Resume item")}</strong>
-    <span class="when">${[x.org, x.when].filter(Boolean).map(esc).join(" - ")}</span>
-    ${(x.bullets || []).length ? `<ul>${(x.bullets || []).map((b) => `<li>${esc(b)}</li>`).join("")}</ul>` : ""}
-  </div>`;
+  /* legacy fallback: flat experience list */
+  return `
+    <div class="rh-sect">
+      <h4 class="rh-sub">Experience &amp; leadership <button class="edit" id="xp-add">+ Add</button></h4>
+      <div class="xp">
+        ${(p.experience || []).map((x, i) => rhItemHTML(x, `data-i="${i}"`, "xp-edit", "xp-del")).join("")}
+        ${(p.experience || []).length === 0 ? `<p class="empty-line">No experience added yet. Add the roles and wins you want Scout to lead with.</p>` : ""}
+      </div>
+    </div>`;
 }
 
 /* resume highlights card: remembers expanded/collapsed across re-renders */
@@ -2048,22 +2652,7 @@ function renderProfile() {
                 ${(p.education || []).length === 0 ? `<p class="empty-line">No education entries yet. Add your school, program, and years.</p>` : ""}
               </div>
             </div>
-            <div class="rh-sect">
-              <h4 class="rh-sub">Experience &amp; leadership <button class="edit" id="xp-add">+ Add</button></h4>
-              <div class="xp">
-                ${(p.experience || []).map((x, i) => `
-                  <div class="xp__item" data-i="${i}">
-                    <strong>${esc(x.role)}</strong>
-                    <span class="when">${esc(x.org)}${x.when ? " · " + esc(x.when) : ""}</span>
-                    <ul>${(x.bullets || []).map((b) => `<li>${esc(b)}</li>`).join("")}</ul>
-                    <div class="xp__actions">
-                      <button class="edit xp-edit" data-i="${i}" title="Edit this role">${icon("pen", "icn icn--xs")} Edit</button>
-                      <button class="edit xp-del" data-i="${i}">Remove</button>
-                    </div>
-                  </div>`).join("")}
-                ${(p.experience || []).length === 0 ? `<p class="empty-line">No experience added yet. Add the roles and wins you want Scout to lead with.</p>` : ""}
-              </div>
-            </div>
+            ${rhCustomSections(p)}
           </div>
           <div class="rh-more" id="rh-more" hidden><button class="pill" id="rh-toggle">Show more</button></div>
         </div>
@@ -2210,13 +2799,13 @@ function renderProfile() {
     toast("Removed");
   }));
 
-  /* experience add/edit/remove */
-  const xpModal = (x = { role: "", org: "", when: "", bullets: [] }, idx = -1) => {
+  /* resume item editor, shared by the legacy flat list and custom sections */
+  const itemModal = (x = { role: "", org: "", when: "", bullets: [] }, heading, onSave) => {
     openModal(`
-      <h2>${idx >= 0 ? "Edit" : "Add"} resume item</h2>
-      <label>Role / title</label><input type="text" id="x-role" value="${esc(x.role)}" placeholder="Revenue Operations Consultant">
-      <label>Company / org</label><input type="text" id="x-org" value="${esc(x.org)}" placeholder="IntegriTurf">
-      <label>Years</label><input type="text" id="x-when" value="${esc(x.when)}" placeholder="2024 · 2025">
+      <h2>${heading}</h2>
+      <label>Role / title</label><input type="text" id="x-role" value="${esc(x.role || "")}" placeholder="Revenue Operations Consultant">
+      <label>Company / org</label><input type="text" id="x-org" value="${esc(x.org || "")}" placeholder="IntegriTurf">
+      <label>Years</label><input type="text" id="x-when" value="${esc(x.when || "")}" placeholder="2024 · 2025">
       <label>Highlights (one per line)</label>
       <textarea id="x-bullets" rows="4" placeholder="Saved a client $70K by automating their rev-ops stack">${esc((x.bullets || []).join("\n"))}</textarea>
       <div class="modal__actions">
@@ -2232,21 +2821,43 @@ function renderProfile() {
         bullets: $("#x-bullets").value.split("\n").map((b) => b.trim()).filter(Boolean),
       };
       if (!item.role && !item.org) { closeModal(); return; }
-      p.experience = p.experience || [];
-      if (idx >= 0) p.experience[idx] = item; else p.experience.push(item);
-      const currentSections = profileSections(p);
-      const workSection = currentSections.find((s) => /experience|professional/i.test(s.title)) || currentSections[0] || { title: "Professional Experience", items: [] };
-      if (idx < 0) workSection.items = [...(workSection.items || []), item];
-      p.sections = currentSections.length ? currentSections : [workSection];
-      p.resumeSections = p.sections;
+      onSave(item);
       saveProfile(); closeModal(); renderProfile();
-      toast("Experience saved");
+      toast("Saved");
     });
   };
-  $("#xp-add", view).addEventListener("click", () => xpModal());
-  $$(".xp-edit", view).forEach((b) => b.addEventListener("click", () => xpModal(p.experience[+b.dataset.i], +b.dataset.i)));
+
+  /* legacy flat experience list (profiles without parsed sections) */
+  $("#xp-add", view)?.addEventListener("click", () => itemModal(undefined, "Add resume item", (item) => {
+    p.experience = [...(p.experience || []), item];
+  }));
+  $$(".xp-edit", view).forEach((b) => b.addEventListener("click", () =>
+    itemModal(p.experience[+b.dataset.i], "Edit resume item", (item) => { p.experience[+b.dataset.i] = item; })));
   $$(".xp-del", view).forEach((b) => b.addEventListener("click", () => {
     p.experience.splice(+b.dataset.i, 1);
+    saveProfile(); renderProfile();
+    toast("Removed");
+  }));
+
+  /* custom resume sections: every row editable in place, per the resume's own headings */
+  $$(".sec-add", view).forEach((b) => b.addEventListener("click", () => {
+    const si = +b.dataset.si;
+    itemModal(undefined, `Add to ${sectionTitleCase(p.sections[si]?.title)}`, (item) => {
+      p.sections[si].items = [...(p.sections[si].items || []), item];
+      syncDerivedFromSections(p);
+    });
+  }));
+  $$(".sec-edit", view).forEach((b) => b.addEventListener("click", () => {
+    const si = +b.dataset.si, ii = +b.dataset.ii;
+    itemModal(p.sections[si]?.items?.[ii], `Edit ${sectionTitleCase(p.sections[si]?.title)} entry`, (item) => {
+      p.sections[si].items[ii] = item;
+      syncDerivedFromSections(p);
+    });
+  }));
+  $$(".sec-del", view).forEach((b) => b.addEventListener("click", () => {
+    const si = +b.dataset.si, ii = +b.dataset.ii;
+    p.sections[si]?.items?.splice(ii, 1);
+    syncDerivedFromSections(p);
     saveProfile(); renderProfile();
     toast("Removed");
   }));
@@ -2347,6 +2958,12 @@ function renderProfile() {
     const zone = $("#resume-zone", view);
     if (zone) zone.innerHTML = `${icon("doc")} ${esc(f.name)}<br><small>Scout is re-reading it…</small>`;
     p.resumeFileName = f.name;
+    /* keep the actual file server-side so "attach my resume" really attaches it */
+    if (filesApiAvailable()) {
+      uploadUserFile(f, "resume").then((saved) => {
+        if (saved) { p.resumeFileId = saved.id; saveProfile(); }
+      });
+    }
     const text = await readFileText(f);
     if (text) p.resumeText = text;
     const parsedResult = await requestResumeParse(f);
@@ -2407,9 +3024,19 @@ function renderSettings() {
         <div class="setrow"><span class="ico">${I.cal}</span><div><strong>Weekend sends</strong><small>Off by default. Replies are 40% lower on weekends</small></div>
           <label class="switch end"><input type="checkbox" data-k="weekends" ${state.autonomy.weekends ? "checked" : ""}><i></i></label></div>
         <div class="setrow"><span class="ico">${I.plane}</span><div><strong>Sending preferences</strong><small>${state.sendPrefs
-          ? `${state.sendPrefs.mode === "auto" ? "Fully automated" : "Review every send"} · via ${state.sendPrefs.channel === "gmail" ? "Gmail" : state.sendPrefs.channel === "linkedin" ? "LinkedIn" : "queue"}`
+          ? `${state.sendPrefs.mode === "auto" ? "Fully automated" : "Review every send"} · via ${state.sendPrefs.channel === "gmail" ? "Gmail" : state.sendPrefs.channel === "linkedin" ? "LinkedIn" : "queue"}${state.sendPrefs.attachResume ? " · resume attached" : ""}${state.sendPrefs.skipPrompt ? "" : " · confirmed each launch"}`
           : "Mode, channel, and attachments for your knocks"}</small></div>
           <button class="btn btn--paper btn--sm end" id="set-sendprefs">Edit</button></div>
+      </div>
+      <div class="pcard" id="files-card">
+        <h3>Attachments</h3>
+        <div id="files-list"><div class="setrow"><span class="ico">${I.doc}</span><div><strong>Loading…</strong><small>Fetching your saved files</small></div></div></div>
+        <div class="setrow" style="border:none">
+          <span class="ico">${I.doc}</span>
+          <div><strong>Add attachment</strong><small>Up to 5 files, 5MB each. Attach them to knocks from the review screen.</small></div>
+          <button class="btn btn--paper btn--sm end" id="file-add">Upload</button>
+        </div>
+        <input type="file" id="file-add-input" multiple hidden>
       </div>
       <div class="pcard">
         <h3>Connections</h3>
@@ -2458,7 +3085,8 @@ function renderSettings() {
     $("#m-reset").addEventListener("click", () => {
       ["knock_profile", "knock_doors", "knock_doors_meta", "knock_campaigns", "knock_messages",
        "knock_connections", "knock_autonomy", "knock_left", "knock_plan", "knock_search_mode", "knock_ob_draft", "knock_days",
-       "knock_filters", "knock_send_prefs", "knock_tour_done", "knock_tracker_tab", "knock_state_updated_at"]
+       "knock_filters", "knock_send_prefs", "knock_tour_done", "knock_tracker_tab", "knock_state_updated_at",
+       "knock_strip_dismissed", "knock_inbox_selected", "knock_profile_expanded"]
         .forEach((k) => localStorage.removeItem(k));
       location.reload();
     });
@@ -2468,6 +3096,49 @@ function renderSettings() {
     if (b.dataset.id === "linkedin") return connectLinkedIn();
   }));
   $$(".conn-off", view).forEach((b) => b.addEventListener("click", () => disconnectProvider(b.dataset.id)));
+
+  /* ---- attachments card: resume + up to 5 extra files ---- */
+  const paintFiles = () => {
+    const list = $("#files-list", view);
+    if (!list) return;
+    if (!filesApiAvailable()) {
+      list.innerHTML = `<div class="setrow"><span class="ico">${I.doc}</span><div><strong>Dev mode</strong><small>Sign in with a real account to store attachments</small></div></div>`;
+      return;
+    }
+    const resume = resumeFile();
+    const extras = attachmentFiles();
+    list.innerHTML = `
+      <div class="setrow"><span class="ico">${I.doc}</span>
+        <div><strong>My resume</strong><small>${resume ? `${esc(resume.name)} · attaches when "Attach my resume" is on` : "Not on file yet. Upload it on the Profile page and it lands here."}</small></div>
+      </div>
+      ${extras.map((f) => `
+        <div class="setrow"><span class="ico">${I.doc}</span>
+          <div><strong>${esc(f.name)}</strong><small>${Math.max(1, Math.round((f.sizeBytes || 0) / 1024))} KB</small></div>
+          <button class="btn btn--paper btn--sm end file-del" data-id="${f.id}">Remove</button>
+        </div>`).join("")}
+      ${extras.length === 0 ? `<div class="setrow"><span class="ico">${I.doc}</span><div><strong>No extra attachments yet</strong><small>Upload case studies, portfolios, or one-pagers to send with knocks</small></div></div>` : ""}`;
+    $$(".file-del", list).forEach((b) => b.addEventListener("click", async () => {
+      b.disabled = true;
+      const ok = await deleteUserFile(b.dataset.id);
+      toast(ok ? "Attachment removed" : "Could not remove that file");
+      paintFiles();
+    }));
+  };
+  loadUserFiles().then(paintFiles);
+  const fileInput = $("#file-add-input", view);
+  $("#file-add", view)?.addEventListener("click", () => {
+    if (!filesApiAvailable()) return toast("Sign in with a real account to store attachments");
+    fileInput.click();
+  });
+  fileInput?.addEventListener("change", async () => {
+    const room = MAX_EXTRA_ATTACHMENTS - attachmentFiles().length;
+    const files = [...fileInput.files].slice(0, Math.max(0, room));
+    if (!files.length && fileInput.files.length) {
+      return toast(`You already have ${MAX_EXTRA_ATTACHMENTS} attachments. Remove one first`);
+    }
+    for (const f of files) await uploadUserFile(f, "attachment");
+    paintFiles();
+  });
 
   fetch("/api/apollo/usage").then((r) => r.json()).then((d) => {
     const el = $("#apollo-status", view);
@@ -2665,6 +3336,16 @@ async function learnWritingVoice(p, notify = true) {
 
 /* upload the resume to the parser; falls back to raw text + local extraction */
 async function parseResumeFile(file) {
+  /* store the file itself too, so "attach my resume" works from day one */
+  if (filesApiAvailable()) {
+    uploadUserFile(file, "resume").then((saved) => {
+      if (saved) {
+        OB.resumeFileId = saved.id;
+        saveOB();
+        if (state.profile) { state.profile.resumeFileId = saved.id; saveProfile(); }
+      }
+    });
+  }
   try {
     const res = await fetch("/api/profile/parse-resume", {
       method: "POST",
@@ -2950,6 +3631,7 @@ async function finishOnboarding() {
     currentRole: OB.currentRole || "",
     story: OB.story || "",
     resumeFileName: OB.resumeFileName || "",
+    resumeFileId: OB.resumeFileId || "",
     resumeText: OB.resumeText || "",
     target: (OB.targetRoles || []).join(", ") || "founders and operators",
     industries: OB.industries || [],

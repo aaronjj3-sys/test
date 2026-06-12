@@ -26,6 +26,8 @@ const apiRoutes = [
   "api/connections/status.js",
   "api/cron/monitor.js",
   "api/dashboard/doors.js",
+  "api/files.js",
+  "api/gmail/import-thread.js",
   "api/gmail/send.js",
   "api/gmail/sync.js",
   "api/google/callback.js",
