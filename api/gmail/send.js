@@ -6,7 +6,7 @@
 
 import { randomUUID } from "node:crypto";
 import { supabaseConfigured, sbSelect, sbInsert, sbUpdate } from "../../lib/supabase/admin.js";
-import { getGoogleConnection, sendEmail } from "../../lib/gmail/client.js";
+import { getGoogleConnection, sendEmail, getThread } from "../../lib/gmail/client.js";
 import { monthlySendCount, planLimit } from "../../lib/gmail/sendQueue.js";
 
 function validUuid(value) {
@@ -15,13 +15,47 @@ function validUuid(value) {
 
 /* Update the existing row when the client passed a DB id; insert otherwise.
    Returns the message row id we ended up writing (or null if DB write failed). */
-async function persistMessage(userId, message, fields) {
+function requestOrigin(req) {
+  const proto = req.headers["x-forwarded-proto"] || "http";
+  const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost:8000";
+  return `${proto}://${host}`;
+}
+
+function threadHeaders(thread) {
+  const ids = (thread || []).map((m) => m.messageIdHeader).filter(Boolean);
+  return {
+    inReplyTo: ids[ids.length - 1] || null,
+    references: ids.join(" ") || null,
+  };
+}
+
+function normalizeAttachments(attachments = []) {
+  return (Array.isArray(attachments) ? attachments : [])
+    .map((a) => {
+      const contentBase64 = String(a?.contentBase64 || "").replace(/^data:[^,]+,/i, "").replace(/\s+/g, "");
+      const size = Number(a?.size || Math.ceil((contentBase64.length * 3) / 4));
+      if (!contentBase64 || size > 5 * 1024 * 1024) return null;
+      return {
+        fileName: String(a.fileName || a.name || "attachment").replace(/[\r\n"]/g, "").slice(0, 180),
+        mimeType: String(a.mimeType || a.type || "application/octet-stream"),
+        contentBase64,
+        size,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 6);
+}
+
+async function persistMessage(userId, message, fields, options = {}) {
+  const contentFields = options.preserveContent ? {} : {
+    subject: message.subject,
+    body: message.body,
+  };
   const base = {
     to_email: message.to,
     to_name: message.toName || null,
-    subject: message.subject,
-    body: message.body,
     updated_at: new Date().toISOString(),
+    ...contentFields,
     ...fields,
   };
   if (validUuid(message.id)) {
@@ -54,6 +88,7 @@ export default async function handler(req, res) {
     to: String(rawMessage.to || "").trim(),
     subject: String(rawMessage.subject || "").trim(),
     body: String(rawMessage.body || "").trim(),
+    kind: String(rawMessage.kind || "").trim(),
   };
   if (!userId) return res.status(400).json({ error: "userId is required" });
   const missing = ["to", "subject", "body"].filter((field) => !message[field]);
@@ -72,9 +107,19 @@ export default async function handler(req, res) {
   }
 
   const dbReady = supabaseConfigured();
+  const existingRows = dbReady && validUuid(message.id)
+    ? await sbSelect("campaign_messages", {
+      filter: { id: message.id, user_id: userId },
+      limit: 1,
+      select: "*",
+    })
+    : [];
+  const existing = existingRows?.[0] || null;
+  const isThreadReply = ["reply", "followup"].includes(message.kind);
+  const attachments = normalizeAttachments(rawMessage.attachments || req.body?.attachments);
 
   /* plan guard: knocks sent this calendar month */
-  if (dbReady) {
+  if (dbReady && !isThreadReply) {
     const limit = await planLimit(userId);
     const used = await monthlySendCount(userId);
     if (used >= limit) {
@@ -95,29 +140,68 @@ export default async function handler(req, res) {
   }
 
   try {
+    let threadId = rawMessage.threadId || null;
+    let inReplyTo = rawMessage.inReplyTo || null;
+    let references = rawMessage.references || null;
+    if (!threadId && existing?.gmail_thread_id && (isThreadReply || /^re:/i.test(message.subject))) {
+      threadId = existing.gmail_thread_id;
+      try {
+        const thread = await getThread(userId, threadId);
+        ({ inReplyTo, references } = threadHeaders(thread));
+      } catch (err) {
+        console.error("Thread headers unavailable:", err.message);
+      }
+    }
+
+    const trackOpenUrl = validUuid(message.id)
+      ? `${requestOrigin(req)}/api/track/open?m=${encodeURIComponent(message.id)}&u=${encodeURIComponent(userId)}`
+      : null;
+
     const sent = await sendEmail({
       userId,
       to: message.to,
       toName: message.toName,
       subject: message.subject,
       body: message.body,
+      threadId,
+      inReplyTo,
+      references,
+      attachments,
+      trackOpenUrl,
     });
 
     let messageId = message.id || null;
     if (dbReady) {
+      const status = message.kind === "followup"
+        ? "followup_sent"
+        : isThreadReply
+          ? (existing?.status === "meeting" ? "meeting" : "replied")
+          : "sent";
+      const rememberedAvailability = isThreadReply && existing?.suggested_reply?.availabilityOptions?.length
+        ? {
+          ...(existing?.reply_classification || {}),
+          availabilityOptions: existing.suggested_reply.availabilityOptions,
+        }
+        : existing?.reply_classification || null;
       messageId = await persistMessage(userId, message, {
-        status: "sent",
-        sent_at: new Date().toISOString(),
+        status,
+        sent_at: existing?.sent_at || new Date().toISOString(),
+        last_followup_at: message.kind === "followup" ? new Date().toISOString() : existing?.last_followup_at || null,
+        followup_count: message.kind === "followup" ? Number(existing?.followup_count || 0) + 1 : existing?.followup_count || 0,
         gmail_message_id: sent.gmailMessageId,
         gmail_thread_id: sent.threadId,
-      });
+        reply_classification: rememberedAvailability,
+        suggested_reply: null,
+        gmail_draft_id: null,
+        last_synced_at: null,
+      }, { preserveContent: isThreadReply });
       if (messageId) {
         await sbInsert("email_events", [
           {
             user_id: userId,
             message_id: messageId,
-            event_type: "sent",
-            metadata: { campaignId: message.campaignId || null, doorId: message.doorId || null },
+            event_type: message.kind === "followup" ? "followup_sent" : "sent",
+            metadata: { campaignId: message.campaignId || null, doorId: message.doorId || null, kind: message.kind || "first_touch" },
           },
         ]);
       }
@@ -125,7 +209,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       ok: true,
-      status: "sent",
+      status: isThreadReply ? (message.kind === "followup" ? "followup_sent" : "replied") : "sent",
       messageId,
       gmailMessageId: sent.gmailMessageId,
       gmailThreadId: sent.threadId,
