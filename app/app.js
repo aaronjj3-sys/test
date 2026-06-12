@@ -356,12 +356,11 @@ async function runSourcing() {
     state.sourcing = false;
     if (!res.ok) throw new Error(data.error || "Sourcing failed");
     state.doors = data.doors;
-    const perPage = data.meta?.perPage || PAGE_SIZE;
     state.doorsMeta = {
       ...data.meta,
-      perPage,
-      /* the initial fetch covers pages 1..N worth of doors */
-      apolloPage: Math.max(data.meta?.page || 1, Math.ceil((data.doors || []).length / perPage)),
+      /* the initial bulk fetch covers pages 1..N in PAGE_SIZE units;
+         prefetch continues from there with limit = PAGE_SIZE */
+      apolloPage: Math.max(data.meta?.page || 1, Math.ceil((data.doors || []).length / PAGE_SIZE)),
       hasMore: data.meta?.hasMore === true,
     };
     state.doorsPage = 0;
@@ -457,14 +456,21 @@ async function prefetchNextDoorsPage() {
 /* targeted pager refresh, keeps table scroll position intact */
 function refreshDoorsPager() {
   if ((location.hash.replace("#", "") || "dashboard") !== "dashboard") return;
-  const old = $("#doors-pager", view);
-  if (!old) return;
   const doors = state.doors || [];
+  const old = $("#doors-pager", view);
+  if (!old) {
+    /* results used to fit one page and the pager wasn't rendered:
+       repaint the queue once so the new page appears */
+    if (doors.length > PAGE_SIZE && $(".doors-table", view) && !state.prefetchingDoors) renderDoorsQueue();
+    return;
+  }
   const page = Math.min(state.doorsPage, Math.max(0, Math.ceil(doors.length / PAGE_SIZE) - 1));
   const holder = document.createElement("div");
   holder.innerHTML = pager(doors.length, page, "doors");
   const next = holder.firstElementChild;
   if (next) { old.replaceWith(next); wireDoorsPager(); }
+  const statDoors = $("#stat-doors", view);
+  if (statDoors) statDoors.textContent = doors.length;
 }
 
 function wireDoorsPager() {
@@ -864,6 +870,7 @@ function openSendPrefs(onDone) {
       attachResume: $("#sp-resume").checked,
     };
     save("knock_send_prefs", state.sendPrefs);
+    schedulePersistProfile();
     closeModal();
     toast("Sending preferences saved");
     onDone && onDone();
@@ -939,8 +946,8 @@ async function runLaunch(selected, scheduleAt) {
         subject: noEmDash(m.subject),
         body: noEmDash(m.body),
         name: d?.name, title: d?.title, company: d?.companyName, companyDomain: d?.companyDomain,
-        to: m.to || d?.email || "",
-        scheduleAt: scheduleAt || null,
+        to: m.to || m.toEmail || d?.email || "",
+        scheduleAt: scheduleAt || m.scheduledAt || null,
       });
     }
     state.selectedDoors = new Set();
@@ -1079,10 +1086,10 @@ function summaryText(m) {
 function updateMessageRow(m) {
   const row = $(`tr[data-msg-id="${m.id}"]`, view);
   if (row) {
-    const st = $(".cell-status", row);
-    if (st) st.innerHTML = msgStatusCell(m);
-    const act = $(".cell-msgact", row);
-    if (act) act.innerHTML = messageActions(m);
+    /* swap the whole row; click handling is delegated to the table */
+    const holder = document.createElement("tbody");
+    holder.innerHTML = trackerRow(m);
+    if (holder.firstElementChild) row.replaceWith(holder.firstElementChild);
   }
   const doorCell = $(`tr[data-id="${m.doorId}"] .door-st`, view);
   if (doorCell) doorCell.innerHTML = stChip(m.status);
@@ -1152,8 +1159,8 @@ function renderInbox() {
       <h2>No threads yet</h2>
       <p>${state.messages.length
         ? googleConnected()
-          ? `Google is connected and ${state.messages.length} knock${state.messages.length === 1 ? " is" : "s are"} queued. When replies come in, every thread shows up here, warmest first.`
-          : `You have ${state.messages.length} knock${state.messages.length === 1 ? "" : "s"} queued. Connect Gmail and Calendar to send emails, detect replies, and schedule meetings.`
+          ? `Google is connected and Scout is sending your ${state.messages.length} knock${state.messages.length === 1 ? "" : "s"} from your own Gmail. When replies come in, every thread shows up here, warmest first.`
+          : `You have ${state.messages.length} knock${state.messages.length === 1 ? "" : "s"} waiting. Connect Gmail and Calendar and Scout sends them immediately, detects replies, and schedules meetings.`
         : "Launch your first campaign from the dashboard. When people reply, every thread shows up here, warmest first."}</p>
       <button class="btn btn--accent" id="inbox-cta">${state.messages.length && !googleConnected() ? "Connect Google" : state.messages.length ? "View the tracker" : "Go to dashboard"}</button>
     </div>
@@ -1374,6 +1381,11 @@ async function runGmailSync() {
       body: JSON.stringify({ userId: user.id }),
     });
     const data = await res.json().catch(() => ({}));
+    if (data.error === "google_not_connected") {
+      state.connections.google = false;
+      saveConnections();
+      return;
+    }
     if (!res.ok || !data.ok) return;
     let replies = 0;
     for (const u of data.updates || []) {
@@ -1413,6 +1425,87 @@ function stopSyncPolling() {
 function saveProfile() {
   state.profile.updatedAt = new Date().toISOString();
   save("knock_profile", state.profile);
+  schedulePersistProfile();
+}
+
+/* ---- durable profile persistence (Supabase `profiles` table) ----
+   Debounced upsert on every save; failures log to console only and the
+   app keeps running on localStorage (dev mode has no Supabase at all). */
+let profilePersistTimer = null;
+function schedulePersistProfile() {
+  const auth = window.knockAuth;
+  if (!auth?.client || !auth.user?.id || auth.user.id === "dev") return;
+  clearTimeout(profilePersistTimer);
+  profilePersistTimer = setTimeout(persistProfileNow, 2000);
+}
+async function persistProfileNow() {
+  const auth = window.knockAuth;
+  const p = state.profile;
+  if (!p || !auth?.client || !auth.user?.id || auth.user.id === "dev") return;
+  try {
+    const { error } = await auth.client.from("profiles").upsert({
+      user_id: auth.user.id,
+      full_name: p.fullName || null,
+      email: p.email || auth.user.email || null,
+      school: p.school || null,
+      location: p.location || null,
+      story: p.story || null,
+      tone: p.tone || null,
+      skills: p.skills || [],
+      quantified_wins: p.quantifiedWins || [],
+      profile_json: p,
+      style_profile: p.styleProfile || null,
+      autonomy: state.autonomy || null,
+      send_prefs: state.sendPrefs || null,
+      plan: state.plan || "free",
+    }, { onConflict: "user_id" });
+    if (error) console.warn("[knock] profile sync skipped:", error.message);
+  } catch (err) {
+    console.warn("[knock] profile sync skipped:", err?.message || err);
+  }
+}
+
+/* on a fresh device/reset, pull the profile back from Supabase */
+async function hydrateProfileFromSupabase() {
+  if (state.profile) return;
+  const auth = window.knockAuth;
+  if (!auth?.client || !auth.user?.id || auth.user.id === "dev") return;
+  try {
+    const { data, error } = await auth.client
+      .from("profiles").select("profile_json").eq("user_id", auth.user.id).limit(1);
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!error && row?.profile_json) {
+      state.profile = row.profile_json;
+      save("knock_profile", state.profile);
+    }
+  } catch (err) {
+    console.warn("[knock] profile hydrate skipped:", err?.message || err);
+  }
+}
+
+/* merge a fresh resume parse into the profile without nuking hand-edits:
+   resume-derived fields update; story/tone/signoff/traits/extraContext/
+   industries/targets/styleProfile are never touched. */
+function mergeParsedProfile(p, parsed) {
+  if (parsed.school) p.school = parsed.school;
+  if (parsed.degree) p.degree = parsed.degree;
+  if (parsed.gradYear) p.gradYear = parsed.gradYear;
+  if (Array.isArray(parsed.skills) && parsed.skills.length) {
+    p.skills = [...new Set([...(p.skills || []), ...parsed.skills])].slice(0, 14);
+  }
+  if (Array.isArray(parsed.quantifiedWins) && parsed.quantifiedWins.length) {
+    p.quantifiedWins = parsed.quantifiedWins;
+  }
+  if (Array.isArray(parsed.experience) && parsed.experience.length) {
+    p.experience = parsed.experience;
+  }
+  if (!p.location && parsed.location) p.location = parsed.location;
+  if (!p.fullName && parsed.fullName) p.fullName = parsed.fullName;
+  const bits = [];
+  if (parsed.quantifiedWins?.length) bits.push(`${parsed.quantifiedWins.length} win${parsed.quantifiedWins.length === 1 ? "" : "s"}`);
+  if (parsed.skills?.length) bits.push(`${parsed.skills.length} skill${parsed.skills.length === 1 ? "" : "s"}`);
+  if (parsed.experience?.length) bits.push(`${parsed.experience.length} role${parsed.experience.length === 1 ? "" : "s"}`);
+  return bits.join(", ");
 }
 
 function renderProfile() {
@@ -1436,7 +1529,7 @@ function renderProfile() {
           <button class="btn btn--paper btn--sm" id="edit-id">Edit details</button>
           <div class="traits">${(p.traits || []).map((t) => `<span class="trait">${esc(t)}</span>`).join("")}</div>
           <div class="voicebox">
-            <b>Writing voice</b>: tone <b>${esc(p.tone || "Sharp")}</b> · sign-off <b>${esc(p.signoff || "- " + firstName())}</b>
+            <span class="voicebox__text"><b>Writing voice</b>: tone <b>${esc(p.tone || "Sharp")}</b> · sign-off <b>${esc(p.signoff || "- " + firstName())}</b></span>
             <button class="edit" id="edit-voice">Edit</button>
           </div>
         </div>
@@ -1606,24 +1699,32 @@ function renderProfile() {
     toast("Saved");
   });
 
-  /* resume re-upload */
+  /* resume re-upload: re-run the AI parser and merge results non-destructively */
   const fileInput = $("#resume-file", view);
   $("#re-upload", view).addEventListener("click", () => fileInput.click());
   $("#resume-zone", view).addEventListener("click", () => fileInput.click());
   fileInput.addEventListener("change", async () => {
     const f = fileInput.files[0];
     if (!f) return;
-    const text = await readFileText(f);
+    const zone = $("#resume-zone", view);
+    if (zone) zone.innerHTML = `${icon("doc")} ${esc(f.name)}<br><small>Scout is re-reading it…</small>`;
     p.resumeFileName = f.name;
-    if (text) {
-      p.resumeText = text;
-      const facts = extractProfileFacts(text + " " + (p.story || ""));
-      p.quantifiedWins = facts.wins;
+    const text = await readFileText(f);
+    if (text) p.resumeText = text;
+    const parsed = await requestResumeParse(f);
+    if (parsed) {
+      const summary = mergeParsedProfile(p, parsed);
+      saveProfile(); renderProfile(); initAccount();
+      toast(`Resume re-parsed${summary ? ": " + summary : ""}`);
+    } else {
+      /* parser offline: local extraction, still non-destructive */
+      const facts = extractProfileFacts((text || "") + " " + (p.story || ""));
+      if (facts.wins.length) p.quantifiedWins = facts.wins;
       if (!p.school && facts.school) p.school = facts.school;
-      p.skills = [...new Set([...(p.skills || []), ...facts.skills])];
+      p.skills = [...new Set([...(p.skills || []), ...facts.skills])].slice(0, 14);
+      saveProfile(); renderProfile();
+      toast("Resume saved. Parser is offline, so existing details were kept");
     }
-    saveProfile(); renderProfile();
-    toast("Resume updated");
   });
 }
 
@@ -1672,8 +1773,8 @@ function renderSettings() {
       </div>
       <div class="pcard">
         <h3>Plan &amp; billing</h3>
-        <div class="setrow"><span class="ico">${I.cap}</span><div><strong>Student · Free</strong><small>${state.knocks} of 15 knocks left this month</small></div>
-          <button class="btn btn--sm end" id="set-upgrade">Go Pro</button></div>
+        <div class="setrow"><span class="ico">${I.cap}</span><div><strong>${state.plan === "pro" ? "Pro" : "Student · Free"}</strong><small>${state.knocks} of ${knockLimit()} knocks left this month</small></div>
+          ${state.plan === "pro" ? "" : `<button class="btn btn--sm end" id="set-upgrade">Go Pro</button>`}</div>
         <div class="setrow"><span class="ico">${I.bell}</span><div><strong>Daily digest</strong><small>One email: new matches + warm threads</small></div>
           <label class="switch end"><input type="checkbox" data-k="digest" ${state.autonomy.digest ? "checked" : ""}><i></i></label></div>
         <div class="setrow"><span class="ico">${I.chat}</span><div><strong>Feedback</strong><small>Tell us what to build next</small></div>
@@ -1684,10 +1785,10 @@ function renderSettings() {
 
   $$('.switch input', view).forEach((sw) =>
     sw.addEventListener("change", () => {
-      if (sw.dataset.k) { state.autonomy[sw.dataset.k] = sw.checked; save("knock_autonomy", state.autonomy); }
+      if (sw.dataset.k) { state.autonomy[sw.dataset.k] = sw.checked; save("knock_autonomy", state.autonomy); schedulePersistProfile(); }
       toast(sw.checked ? "On" : "Off");
     }));
-  $("#set-upgrade", view).addEventListener("click", openUpgrade);
+  $("#set-upgrade", view)?.addEventListener("click", openUpgrade);
   $("#set-sendprefs", view).addEventListener("click", () => openSendPrefs(renderSettings));
   $("#set-feedback", view).addEventListener("click", openFeedback);
   $("#set-connections", view).addEventListener("click", openConnections);
@@ -1703,7 +1804,7 @@ function renderSettings() {
     $("#m-cancel").addEventListener("click", closeModal);
     $("#m-reset").addEventListener("click", () => {
       ["knock_profile", "knock_doors", "knock_doors_meta", "knock_campaigns", "knock_messages",
-       "knock_connections", "knock_autonomy", "knock_left", "knock_search_mode", "knock_ob_draft", "knock_days",
+       "knock_connections", "knock_autonomy", "knock_left", "knock_plan", "knock_search_mode", "knock_ob_draft", "knock_days",
        "knock_filters", "knock_send_prefs", "knock_tour_done"]
         .forEach((k) => localStorage.removeItem(k));
       location.reload();
@@ -1848,18 +1949,36 @@ function extractProfileFacts(text) {
   return { wins, school: schoolMatch ? schoolMatch[0].replace(/^UCI$/, "UC Irvine") : null, skills };
 }
 
-/* upload the resume to the parser; falls back to raw text + local extraction */
-async function parseResumeFile(file) {
+/* file → base64, chunked to dodge call-stack limits on big resumes */
+async function fileToBase64(file) {
+  const buf = await file.arrayBuffer();
+  let bin = "";
+  const bytes = new Uint8Array(buf);
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  return btoa(bin);
+}
+
+/* POST the resume to the AI parser; null when the parser can't help */
+async function requestResumeParse(file) {
   try {
-    const buf = await file.arrayBuffer();
-    let bin = "";
-    const bytes = new Uint8Array(buf);
-    const CHUNK = 0x8000;
-    for (let i = 0; i < bytes.length; i += CHUNK) bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
     const res = await fetch("/api/profile/parse-resume", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fileName: file.name, contentBase64: btoa(bin) }),
+      body: JSON.stringify({ fileName: file.name, contentBase64: await fileToBase64(file) }),
+    });
+    const data = await res.json();
+    return data.ok && data.parsed ? data.parsed : null;
+  } catch { return null; }
+}
+
+/* upload the resume to the parser; falls back to raw text + local extraction */
+async function parseResumeFile(file) {
+  try {
+    const res = await fetch("/api/profile/parse-resume", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fileName: file.name, contentBase64: await fileToBase64(file) }),
     });
     const data = await res.json();
     if (data.ok && data.parsed) {
@@ -2196,7 +2315,7 @@ const TOUR_STEPS = [
   { route: "dashboard", sel: "#filterbar", title: "Slice the search", text: "Filter by industry, location, company, or any keyword. Pick a suggestion or type your own, then hit Search and Scout pulls a fresh 100 people." },
   { route: "dashboard", sel: ".doors-table", title: "Your launch queue", text: "25 people per page, scored against your profile. Tick the ones you want, hit Review knock to read and edit the draft, then Approve & launch." },
   { route: "inbox", sel: ".ghost, .inbox", title: "Inbox", text: "Replies land here once Google is connected, warmest threads first. The Connections button manages every channel." },
-  { route: "tracker", sel: ".funnel-tabs", title: "Tracker", text: "Every knock moves through queued, sent, opened, replied, and meeting booked. Pause, resume, or cancel queued knocks right from the table." },
+  { route: "tracker", sel: ".funnel-tabs", title: "Tracker", text: "Watch every knock live: drafting, sending, sent, replied, meeting booked. Pause, retry, or review Scout's suggested replies right from the table." },
   { route: "profile", sel: ".profile-grid", title: "Your profile", text: "Everything Scout knows about you, parsed from your resume. Every field is editable, and every edit updates future drafts instantly." },
   { route: "settings", sel: ".settings-grid", title: "Settings", text: "Connections (Google, LinkedIn), agent autonomy, sending preferences, and your plan all live here." },
 ];
@@ -2326,8 +2445,19 @@ $("#acct-tour")?.addEventListener("click", () => { $("#acct-menu").hidden = true
     history.replaceState(null, "", location.pathname + "#dashboard");
   }
   handleConnectReturn();
+  /* nothing local? pull the profile back from Supabase before deciding on onboarding */
+  await hydrateProfileFromSupabase();
   initAccount();
   navigate();
   syncConnections();
   if (!state.profile) openOnboarding(1);
+
+  /* resume the send pipeline after a reload or an OAuth round-trip:
+     un-stick anything caught mid-flight and release parked knocks */
+  let resumable = 0;
+  state.messages.forEach((m) => {
+    if (m.status === "drafting" || m.status === "sending") { m.status = "queued"; resumable++; }
+    if (m.status === "waiting_gmail" && googleConnected()) { m.status = "queued"; resumable++; }
+  });
+  if (resumable) { saveLive(); processSendQueue(); }
 })();
