@@ -3,7 +3,11 @@
    Output: { ok, styleProfile, source: "openai"|"claude"|"deterministic" }
    Learns the user's writing voice from their own samples. Deterministic
    metrics always run; OpenAI refines first when CHATGPT_API_KEY is set,
-   then Claude (legacy path) when ANTHROPIC_API_KEY is set. */
+   then Claude (legacy path) when ANTHROPIC_API_KEY is set.
+   The OpenAI path returns the deep breakdown (greetingStyle, signoffStyle,
+   punctuationHabits, vocabularyNotes, averageSentenceWords, warmth) on top
+   of the original fields; fallback paths return the original fields only,
+   so every new field is strictly additive downstream. */
 
 import { analyzeStyleDeterministic } from "../../lib/knock/style.js";
 import { claudeJSON, claudeConfigured, STYLE_SCHEMA } from "../../lib/knock/claude.js";
@@ -49,7 +53,14 @@ export default async function handler(req, res) {
   }
 
   const styleProfile = refined
-    ? { ...refined, quirks: (refined.quirks || []).slice(0, 4), source: refinedSource }
+    ? {
+        ...refined,
+        quirks: (refined.quirks || []).slice(0, 4),
+        averageSentenceWords: Number.isFinite(refined.averageSentenceWords)
+          ? Math.max(1, Math.round(refined.averageSentenceWords))
+          : undefined,
+        source: refinedSource,
+      }
     : deterministic;
 
   return res.status(200).json({ ok: true, source: styleProfile.source, styleProfile });
