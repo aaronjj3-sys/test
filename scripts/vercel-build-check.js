@@ -34,6 +34,7 @@ const apiRoutes = [
   "api/knock/improve.js",
   "api/linkedin/callback.js",
   "api/linkedin/connect.js",
+  "api/profile/extract-text.js",
   "api/profile/parse-resume.js",
   "api/profile/analyze-style.js",
   "api/sourcing/apollo.js",

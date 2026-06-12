@@ -318,12 +318,23 @@ tbody tr:hover { background: var(--accent-soft); }
 .msg--you { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; box-shadow: 2px 2px 0 var(--border); }
 .msg--you time { color: #cfe2f3; }
 .msg--them { align-self: flex-start; background: var(--panel); border-bottom-left-radius: 4px; box-shadow: -2px 2px 0 var(--border); }
+.msg--draft { align-self: stretch; max-width: 100%; background: var(--butter); border-radius: 16px; box-shadow: var(--pop); }
 .threadview__reply { display: flex; gap: 0.6rem; padding: 0.9rem 1.4rem; border-top: 1.5px solid var(--border); }
 .threadview__reply input {
   flex: 1; border: 1.5px solid var(--border); border-radius: 999px; padding: 0.6rem 1rem;
   font-size: 0.85rem; font-weight: 500; outline: none; background: var(--bg);
 }
 .threadview__reply input:focus { box-shadow: 2px 2px 0 var(--border); }
+.thread-history {
+  border: 1.5px solid var(--border); border-radius: 14px; background: var(--card);
+  box-shadow: 2px 2px 0 var(--border); padding: 0.9rem 1rem; display: grid; gap: 0.55rem;
+}
+.thread-history h4 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-faint); }
+.thread-history div { border-top: 1px solid var(--line); padding-top: 0.5rem; }
+.thread-history div:first-of-type { border-top: none; padding-top: 0; }
+.thread-history b { font-size: 0.75rem; color: var(--ink); text-transform: capitalize; }
+.thread-history span { margin-left: 0.5rem; font-size: 0.68rem; color: var(--ink-faint); font-weight: 700; }
+.thread-history p { font-size: 0.78rem; color: var(--ink-soft); margin-top: 0.12rem; }
 .empty {
   display: grid; place-items: center; height: 100%; color: var(--ink-faint);
   font-size: 0.9rem; font-weight: 600; text-align: center; padding: 2rem;
@@ -756,6 +767,18 @@ tbody tr:hover { background: var(--accent-soft); }
 .xp__actions .edit { font-size: 0.7rem; font-weight: 700; color: var(--ink-faint); background: none; border: none; padding: 0; }
 .xp__actions .edit:hover { color: var(--accent-deep); }
 .empty-line { color: var(--ink-faint); font-size: 0.82rem; font-weight: 500; }
+.profile-sections { overflow: hidden; }
+.resume-section + .resume-section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+.resume-section h4 {
+  font-size: 0.78rem; font-weight: 900; color: var(--accent-deep);
+  text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.65rem;
+}
+.morelink {
+  margin-top: 0.9rem; background: var(--panel); color: var(--accent-deep);
+  border: 1.5px dashed var(--border); border-radius: 999px; padding: 0.38rem 0.8rem;
+  font-size: 0.74rem; font-weight: 800;
+}
+.morelink:hover { background: var(--accent-soft); box-shadow: 2px 2px 0 var(--border); }
 .skills span { display: inline-flex; align-items: center; gap: 0.3rem; }
 .chip-x { background: none; border: none; color: var(--ink-faint); font-size: 0.85rem; line-height: 1; padding: 0; }
 .chip-x:hover { color: #c2502e; }
@@ -770,6 +793,8 @@ tbody tr:hover { background: var(--accent-soft); }
 .profile-extra { min-height: 214px; display: flex; flex-direction: column; }
 .profile-extra textarea { min-height: 96px; flex: 1; }
 .profile-extra .modal__actions { margin-top: auto; }
+.profile-samples .dropzone { margin-top: 0.8rem; }
+.sample-note { display: block; color: var(--green); font-size: 0.72rem; font-weight: 700; margin-top: 0.65rem; }
 
 /* ============ v5: filter bar, tour, tracker actions, send prefs ============ */
 

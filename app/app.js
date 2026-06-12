@@ -41,6 +41,8 @@ const state = {
   searchMode: load("knock_search_mode", "founders"),
   searchFilters: load("knock_filters", { keywords: [], industries: [], locations: [], companies: [] }),
   sendPrefs: load("knock_send_prefs", null),
+  profileExpanded: load("knock_profile_expanded", { sections: false, samples: false }),
+  inboxSelectedId: load("knock_inbox_selected", null),
   apolloUsage: load("knock_apollo_usage", {
     configured: false,
     apiDayLeft: null,
@@ -340,8 +342,8 @@ function navigate() {
   view.scrollTop = 0;
   fn();
   updateChrome();
-  /* reply/follow-up sync only runs while dashboard or tracker is on screen */
-  if (route === "dashboard" || route === "people" || route === "tracker") startSyncPolling();
+  /* reply/follow-up sync runs while live message views are on screen */
+  if (route === "dashboard" || route === "people" || route === "tracker" || route === "inbox") startSyncPolling();
   else stopSyncPolling();
 }
 window.addEventListener("hashchange", navigate);
@@ -1052,6 +1054,12 @@ async function runLaunch(selected, scheduleAt) {
 let sendRunActive = false;
 
 function setMsgStatus(m, status) {
+  if (m.status !== status) {
+    m.history = [
+      ...(m.history || []),
+      { at: new Date().toISOString(), type: "status", label: status },
+    ].slice(-20);
+  }
   m.status = status;
   m.updatedAt = new Date().toISOString();
   saveLive();
@@ -1207,6 +1215,10 @@ async function processSingleSend(m) {
       if (data.gmailMessageId) m.gmailMessageId = data.gmailMessageId;
       if (data.gmailThreadId) m.gmailThreadId = data.gmailThreadId;
       m.error = null;
+      m.history = [
+        ...(m.history || []),
+        { at: new Date().toISOString(), type: data.status === "scheduled" ? "scheduled" : "sent", label: noEmDash(m.subject), body: noEmDash(m.body) },
+      ].slice(-20);
       state.knocks = Math.max(0, state.knocks - 1); /* knocks burn on send, not on queue */
       setMsgStatus(m, data.status === "scheduled" ? "scheduled" : "sent");
       updateChrome();
@@ -1314,31 +1326,79 @@ function openConnections() {
 }
 
 function renderInbox() {
+  const messages = [...state.messages].sort((a, b) => {
+    const priority = (m) => m.status === "needs_review" ? 0 : m.status === "replied" ? 1 : m.status === "sent" ? 2 : 3;
+    return priority(a) - priority(b) || (Date.parse(b.updatedAt || b.createdAt) || 0) - (Date.parse(a.updatedAt || a.createdAt) || 0);
+  });
+  const selected = messages.find((m) => m.id === state.inboxSelectedId) || messages[0];
+  if (selected) {
+    state.inboxSelectedId = selected.id;
+    save("knock_inbox_selected", selected.id);
+  }
+
+  const threadMessages = selected?.threadMessages || [];
+  const history = selected ? [
+    { at: selected.createdAt, type: "created", label: "Queued", body: selected.body || selected.draftPreview || "" },
+    ...(selected.history || []),
+  ].filter((h) => h?.label || h?.body) : [];
+
   view.innerHTML = `<div class="viewwrap">
     <div class="vh vh--row">
       <div>
         <h1>Inbox. <em>Warm threads first.</em></h1>
-        <p>Scout tracks every reply and flags the doors that are opening.</p>
+        <p>Scout tracks every knock, reply, follow-up, and draft in one place.</p>
       </div>
       <button class="btn btn--paper" id="connections-btn">${icon("plug")} Connections</button>
     </div>
+    ${messages.length ? `
+    <div class="inbox">
+      <div class="threadlist">
+        ${messages.map((m) => `
+          <button class="thread-item ${selected?.id === m.id ? "is-open" : ""}" data-id="${m.id}">
+            <span class="thread-item__row"><strong>${esc(m.name || "Unknown")}</strong><time>${new Date(m.updatedAt || m.createdAt).toLocaleDateString()}</time></span>
+            <span class="subj">${esc(m.subject || "quick question")}</span>
+            <span class="warmtag">${esc((m.status || "queued").replaceAll("_", " "))}${m.suggestedReply ? " - draft ready" : ""}</span>
+          </button>`).join("")}
+      </div>
+      <div class="threadview">
+        <div class="threadview__head">
+          <h3>${esc(selected?.subject || "Select a thread")}</h3>
+          <small>${esc(selected?.name || "")}${selected?.company ? " - " + esc(selected.company) : ""} ${selected?.to ? " - " + esc(selected.to) : ""}</small>
+        </div>
+        <div class="threadview__msgs">
+          ${selected?.body ? `<div class="msg msg--you"><time>Original knock</time>${esc(selected.body)}</div>` : ""}
+          ${threadMessages.map((tm) => `
+            <div class="msg ${tm.isFromMe ? "msg--you" : "msg--them"}">
+              <time>${esc(tm.isFromMe ? "You" : tm.from || "Them")} ${tm.date ? " - " + new Date(tm.date).toLocaleString() : ""}</time>
+              ${esc(tm.body || tm.subject || "")}
+            </div>`).join("")}
+          ${selected?.suggestedReply ? `<div class="msg msg--draft"><time>Scout draft</time><b>${esc(selected.suggestedReply.subject || "")}</b><br>${esc(selected.suggestedReply.body || "")}</div>` : ""}
+          ${history.length ? `<div class="thread-history">
+            <h4>Version history</h4>
+            ${history.slice(-8).map((h) => `<div><b>${esc(h.type || "update")}</b><span>${h.at ? new Date(h.at).toLocaleString() : ""}</span><p>${esc(h.label || "")}</p></div>`).join("")}
+          </div>` : ""}
+        </div>
+        <div class="threadview__reply">
+          ${selected?.suggestedReply ? `<button class="btn btn--accent msg-reply" data-id="${selected.id}">View suggested reply</button>` : `<button class="btn btn--paper" id="open-tracker">Open tracker</button>`}
+        </div>
+      </div>
+    </div>` : `
     <div class="ghost">
       <div class="ghost__icon">${I.mail}</div>
       <h2>No threads yet</h2>
-      <p>${state.messages.length
-        ? googleConnected()
-          ? `Google is connected and Scout is sending your ${state.messages.length} knock${state.messages.length === 1 ? "" : "s"} from your own Gmail. When replies come in, every thread shows up here, warmest first.`
-          : `You have ${state.messages.length} knock${state.messages.length === 1 ? "" : "s"} waiting. Connect Gmail and Calendar and Scout sends them immediately, detects replies, and schedules meetings.`
-        : "Launch your first campaign from the dashboard. When people reply, every thread shows up here, warmest first."}</p>
-      <button class="btn btn--accent" id="inbox-cta">${state.messages.length && !googleConnected() ? "Connect Google" : state.messages.length ? "View the tracker" : "Go to dashboard"}</button>
-    </div>
+      <p>Launch your first campaign from the dashboard. Every sent knock, follow-up, reply, and Scout draft will show up here.</p>
+      <button class="btn btn--accent" id="inbox-cta">Go to dashboard</button>
+    </div>`}
   </div>`;
   $("#connections-btn", view).addEventListener("click", openConnections);
-  $("#inbox-cta", view).addEventListener("click", () => {
-    if (state.messages.length && !googleConnected()) connectGoogle();
-    else if (state.messages.length) location.hash = "tracker";
-    else location.hash = "dashboard";
-  });
+  $$(".thread-item", view).forEach((b) => b.addEventListener("click", () => {
+    state.inboxSelectedId = b.dataset.id;
+    save("knock_inbox_selected", state.inboxSelectedId);
+    renderInbox();
+  }));
+  $(".msg-reply", view)?.addEventListener("click", (e) => openSuggestedReply(msgById(e.target.dataset.id)));
+  $("#open-tracker", view)?.addEventListener("click", () => { location.hash = "tracker"; });
+  $("#inbox-cta", view)?.addEventListener("click", () => { location.hash = "dashboard"; });
 }
 
 /* ============================================================
@@ -1575,8 +1635,15 @@ async function runGmailSync() {
       }
       if (u.classification) m.classification = u.classification;
       if (u.suggestedReply) m.suggestedReply = u.suggestedReply;
+      if (u.threadMessages) m.threadMessages = u.threadMessages;
       if (u.meetLink) m.meetLink = u.meetLink;
       if (u.followupNumber != null) m.followupNumber = u.followupNumber;
+      if (u.suggestedReply) {
+        m.history = [
+          ...(m.history || []),
+          { at: new Date().toISOString(), type: u.suggestedReply.kind || "reply", label: u.suggestedReply.subject || "Suggested reply", body: u.suggestedReply.body || "" },
+        ].slice(-20);
+      }
       updateMessageRow(m);
     }
     if ((data.updates || []).length) {
@@ -1677,19 +1744,74 @@ function mergeParsedProfile(p, parsed) {
   if (Array.isArray(parsed.experience) && parsed.experience.length) {
     p.experience = parsed.experience;
   }
+  if (Array.isArray(parsed.sections) && parsed.sections.length) {
+    p.sections = parsed.sections;
+    p.resumeSections = parsed.sections;
+  }
   if (!p.location && parsed.location) p.location = parsed.location;
   if (!p.fullName && parsed.fullName) p.fullName = parsed.fullName;
   const bits = [];
   if (parsed.quantifiedWins?.length) bits.push(`${parsed.quantifiedWins.length} win${parsed.quantifiedWins.length === 1 ? "" : "s"}`);
   if (parsed.skills?.length) bits.push(`${parsed.skills.length} skill${parsed.skills.length === 1 ? "" : "s"}`);
   if (parsed.experience?.length) bits.push(`${parsed.experience.length} role${parsed.experience.length === 1 ? "" : "s"}`);
+  if (parsed.sections?.length) bits.push(`${parsed.sections.length} section${parsed.sections.length === 1 ? "" : "s"}`);
   return bits.join(", ");
+}
+
+function profileSections(p) {
+  const sections = Array.isArray(p.sections) && p.sections.length
+    ? p.sections
+    : Array.isArray(p.resumeSections) && p.resumeSections.length
+      ? p.resumeSections
+      : [];
+  if (sections.length) {
+    return sections
+      .map((s) => ({
+        title: s.title || "Resume",
+        items: (s.items || []).filter((item) => item?.role || item?.org || item?.bullets?.length),
+      }))
+      .filter((s) => s.items.length);
+  }
+  return (p.experience || []).length ? [{ title: "Experience", items: p.experience }] : [];
+}
+
+function sectionItemCount(sections) {
+  return sections.reduce((sum, s) => sum + (s.items || []).length, 0);
+}
+
+function renderSectionItem(x) {
+  return `<div class="xp__item">
+    <strong>${esc(x.role || x.org || "Resume item")}</strong>
+    <span class="when">${[x.org, x.when].filter(Boolean).map(esc).join(" - ")}</span>
+    ${(x.bullets || []).length ? `<ul>${(x.bullets || []).map((b) => `<li>${esc(b)}</li>`).join("")}</ul>` : ""}
+  </div>`;
 }
 
 function renderProfile() {
   if (!state.profile) return renderNeedsProfile();
   const p = state.profile;
   const initials = (p.fullName || "?").split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() || "").join("") || "?";
+  const sections = profileSections(p);
+  const totalSectionItems = sectionItemCount(sections);
+  const sectionsExpanded = Boolean(state.profileExpanded.sections);
+  let shownSectionItems = 0;
+  const sectionLimit = 5;
+  const sectionsHtml = sections.map((section) => {
+    const items = [];
+    for (const item of section.items || []) {
+      shownSectionItems += 1;
+      if (!sectionsExpanded && shownSectionItems > sectionLimit) continue;
+      items.push(renderSectionItem(item));
+    }
+    if (!items.length) return "";
+    return `<section class="resume-section">
+      <h4>${esc(section.title)}</h4>
+      <div class="xp">${items.join("")}</div>
+    </section>`;
+  }).join("");
+  const samples = p.writingSamples || [];
+  const sampleTexts = p.writingSampleTexts || [];
+  const samplesExpanded = Boolean(state.profileExpanded.samples);
 
   view.innerHTML = `<div class="viewwrap">
     <div class="vh"><h1>This is who Scout <em>sounds like.</em></h1>
@@ -1715,8 +1837,8 @@ function renderProfile() {
           <h3>Resume <button class="edit" id="re-upload">Re-upload</button></h3>
           <div class="dropzone ${p.resumeFileName ? "is-filled" : ""}" id="resume-zone">
             ${p.resumeFileName
-              ? `${icon("doc")} ${esc(p.resumeFileName)}<br><small>${(p.quantifiedWins || []).length} quantified win${(p.quantifiedWins || []).length === 1 ? "" : "s"} extracted</small>`
-              : `${icon("doc")} Drop your resume here`}
+              ? `${icon("doc")} ${esc(p.resumeFileName)}<br><small>Drag a new resume here to update it automatically</small>`
+              : `${icon("doc")} Drop your resume here<br><small>PDF, Word, or text</small>`}
           </div>
           <input type="file" id="resume-file" accept=".pdf,.doc,.docx,.txt,.md" hidden>
         </div>
@@ -1727,8 +1849,10 @@ function renderProfile() {
           <p class="story" id="story-text">${p.story ? `“${esc(p.story)}”` : "Add the one or two sentences that make people reply."}</p>
         </div>
         <div class="pcard">
-          <h3>Experience <button class="edit" id="xp-add">+ Add</button></h3>
-          <div class="xp">
+          <h3>Resume highlights <button class="edit" id="xp-add">Edit</button></h3>
+          ${sectionsHtml || `<p class="empty-line">No resume sections added yet. Re-upload your resume or add the roles and wins you want Scout to lead with.</p>`}
+          ${totalSectionItems > sectionLimit ? `<button class="morelink" id="sections-more">${sectionsExpanded ? "Show less" : `Show ${totalSectionItems - sectionLimit} more`}</button>` : ""}
+          <div class="xp" hidden>
             ${(p.experience || []).map((x, i) => `
               <div class="xp__item" data-i="${i}">
                 <strong>${esc(x.role)}</strong>
@@ -1745,6 +1869,18 @@ function renderProfile() {
             ${(p.skills || []).map((s, i) => `<span>${esc(s)}<button class="chip-x" data-i="${i}" title="Remove">&times;</button></span>`).join("")}
             <input type="text" id="skill-add" placeholder="+ add a skill" />
           </div>
+        </div>
+        <div class="pcard profile-samples">
+          <h3>Writing samples <button class="edit" id="samples-add">Add</button></h3>
+          <p class="empty-line">Drop emails, essays, posts, or notes so Scout can write more like you.</p>
+          <div class="dropzone ${samples.length ? "is-filled" : ""}" id="samples-zone">
+            ${samples.length
+              ? `${icon("doc")} ${samples.length} sample${samples.length === 1 ? "" : "s"} saved<br><small>${samples.slice(0, samplesExpanded ? samples.length : 3).map(esc).join(" - ")}</small>`
+              : `${icon("doc")} Drop writing samples here<br><small>.txt, .md, .eml, .docx, or paste text</small>`}
+          </div>
+          <input type="file" id="samples-file" multiple accept=".pdf,.doc,.docx,.txt,.md,.eml" hidden>
+          ${sampleTexts.length ? `<small class="sample-note">Voice learner has ${sampleTexts.length} text sample${sampleTexts.length === 1 ? "" : "s"} available.</small>` : ""}
+          ${samples.length > 3 ? `<button class="morelink" id="samples-more">${samplesExpanded ? "Show less" : `Show ${samples.length - 3} more`}</button>` : ""}
         </div>
         <div class="pcard profile-extra">
           <h3>Anything else Scout should know</h3>
@@ -1823,7 +1959,7 @@ function renderProfile() {
   /* experience add/edit/remove */
   const xpModal = (x = { role: "", org: "", when: "", bullets: [] }, idx = -1) => {
     openModal(`
-      <h2>${idx >= 0 ? "Edit" : "Add"} experience</h2>
+      <h2>${idx >= 0 ? "Edit" : "Add"} resume item</h2>
       <label>Role / title</label><input type="text" id="x-role" value="${esc(x.role)}" placeholder="Revenue Operations Consultant">
       <label>Company / org</label><input type="text" id="x-org" value="${esc(x.org)}" placeholder="IntegriTurf">
       <label>Years</label><input type="text" id="x-when" value="${esc(x.when)}" placeholder="2024 · 2025">
@@ -1844,6 +1980,11 @@ function renderProfile() {
       if (!item.role && !item.org) { closeModal(); return; }
       p.experience = p.experience || [];
       if (idx >= 0) p.experience[idx] = item; else p.experience.push(item);
+      const currentSections = profileSections(p);
+      const workSection = currentSections.find((s) => /experience|professional/i.test(s.title)) || currentSections[0] || { title: "Professional Experience", items: [] };
+      if (idx < 0) workSection.items = [...(workSection.items || []), item];
+      p.sections = currentSections.length ? currentSections : [workSection];
+      p.resumeSections = p.sections;
       saveProfile(); closeModal(); renderProfile();
       toast("Experience saved");
     });
@@ -1870,6 +2011,75 @@ function renderProfile() {
     saveProfile(); renderProfile();
   });
 
+  $("#sections-more", view)?.addEventListener("click", () => {
+    state.profileExpanded.sections = !state.profileExpanded.sections;
+    save("knock_profile_expanded", state.profileExpanded);
+    renderProfile();
+  });
+
+  $("#samples-more", view)?.addEventListener("click", () => {
+    state.profileExpanded.samples = !state.profileExpanded.samples;
+    save("knock_profile_expanded", state.profileExpanded);
+    renderProfile();
+  });
+
+  const addWritingFiles = async (files) => {
+    if (!files?.length) return;
+    const zone = $("#samples-zone", view);
+    if (zone) zone.innerHTML = `${icon("doc")} Scout is reading your samples...`;
+    p.writingSamples = p.writingSamples || [];
+    p.writingSampleTexts = p.writingSampleTexts || [];
+    for (const f of [...files].slice(0, 10)) {
+      if (p.writingSamples.length >= 10) break;
+      let text = await readFileText(f);
+      if (!text) text = await requestTextExtract(f);
+      p.writingSamples.push(f.name);
+      if (text) p.writingSampleTexts.push(text.slice(0, 6000));
+    }
+    p.writingSamples = p.writingSamples.slice(0, 10);
+    p.writingSampleTexts = p.writingSampleTexts.slice(0, 10);
+    saveProfile();
+    renderProfile();
+    learnWritingVoice(p);
+  };
+
+  const sampleInput = $("#samples-file", view);
+  $("#samples-add", view)?.addEventListener("click", () => {
+    openModal(`
+      <h2>Add writing samples</h2>
+      <p class="sub">Paste an email, post, essay, or note that sounds like you. Scout uses it to tune rhythm and phrasing.</p>
+      <label>Paste a sample</label>
+      <textarea id="sample-paste" rows="7" placeholder="Paste a real sample here"></textarea>
+      <div class="modal__actions">
+        <button class="btn btn--ghost" id="m-cancel">Cancel</button>
+        <button class="btn btn--paper" id="sample-browse">Browse files</button>
+        <button class="btn btn--accent" id="sample-save">Save sample</button>
+      </div>`);
+    $("#m-cancel").addEventListener("click", closeModal);
+    $("#sample-browse").addEventListener("click", () => { closeModal(); sampleInput.click(); });
+    $("#sample-save").addEventListener("click", () => {
+      const text = $("#sample-paste", modal).value.trim();
+      if (!text) return obError("#sample-paste", "Paste a sample first.");
+      p.writingSamples = [...(p.writingSamples || []), `pasted sample ${(p.writingSamples || []).length + 1}`].slice(0, 10);
+      p.writingSampleTexts = [...(p.writingSampleTexts || []), text.slice(0, 6000)].slice(0, 10);
+      saveProfile();
+      closeModal();
+      renderProfile();
+      learnWritingVoice(p);
+    });
+  });
+  $("#samples-zone", view)?.addEventListener("click", () => sampleInput.click());
+  sampleInput?.addEventListener("change", () => addWritingFiles(sampleInput.files));
+  ["dragover", "dragenter"].forEach((ev) => $("#samples-zone", view)?.addEventListener(ev, (e) => {
+    e.preventDefault();
+    $("#samples-zone", view)?.classList.add("is-drag");
+  }));
+  ["dragleave", "drop"].forEach((ev) => $("#samples-zone", view)?.addEventListener(ev, (e) => {
+    e.preventDefault();
+    $("#samples-zone", view)?.classList.remove("is-drag");
+    if (ev === "drop") addWritingFiles(e.dataTransfer.files);
+  }));
+
   /* extra context */
   $("#ctx-save", view).addEventListener("click", () => {
     p.extraContext = $("#extra-ctx", view).value.trim();
@@ -1879,10 +2089,7 @@ function renderProfile() {
 
   /* resume re-upload: re-run the AI parser and merge results non-destructively */
   const fileInput = $("#resume-file", view);
-  $("#re-upload", view).addEventListener("click", () => fileInput.click());
-  $("#resume-zone", view).addEventListener("click", () => fileInput.click());
-  fileInput.addEventListener("change", async () => {
-    const f = fileInput.files[0];
+  const handleResumeUpload = async (f) => {
     if (!f) return;
     const zone = $("#resume-zone", view);
     if (zone) zone.innerHTML = `${icon("doc")} ${esc(f.name)}<br><small>Scout is re-reading it…</small>`;
@@ -1906,7 +2113,19 @@ function renderProfile() {
         ? "Resume saved. Scout pulled what it could locally"
         : (parsedResult?.note || "Resume saved. Scout could not read text from this file yet"));
     }
-  });
+  };
+  $("#re-upload", view).addEventListener("click", () => fileInput.click());
+  $("#resume-zone", view).addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => handleResumeUpload(fileInput.files[0]));
+  ["dragover", "dragenter"].forEach((ev) => $("#resume-zone", view)?.addEventListener(ev, (e) => {
+    e.preventDefault();
+    $("#resume-zone", view)?.classList.add("is-drag");
+  }));
+  ["dragleave", "drop"].forEach((ev) => $("#resume-zone", view)?.addEventListener(ev, (e) => {
+    e.preventDefault();
+    $("#resume-zone", view)?.classList.remove("is-drag");
+    if (ev === "drop") handleResumeUpload(e.dataTransfer.files?.[0]);
+  }));
 }
 
 /* ============================================================
@@ -2157,6 +2376,40 @@ async function requestResumeParse(file) {
   }
 }
 
+async function requestTextExtract(file) {
+  try {
+    const res = await fetch("/api/profile/extract-text", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fileName: file.name, contentBase64: await fileToBase64(file) }),
+    });
+    const data = await res.json();
+    return data.ok ? data.text || "" : "";
+  } catch {
+    return "";
+  }
+}
+
+async function learnWritingVoice(p, notify = true) {
+  const samples = (p.writingSampleTexts || []).filter(Boolean).slice(0, 10);
+  if (!samples.length && !p.story) return;
+  try {
+    const res = await fetch("/api/profile/analyze-style", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ samples, story: p.story || "" }),
+    });
+    const data = await res.json();
+    if (data.ok && data.styleProfile) {
+      p.styleProfile = data.styleProfile;
+      saveProfile();
+      if (notify) toast("Scout relearned your writing voice");
+    }
+  } catch {
+    if (notify) toast("Writing samples saved. Voice learning will retry later.");
+  }
+}
+
 /* upload the resume to the parser; falls back to raw text + local extraction */
 async function parseResumeFile(file) {
   try {
@@ -2171,7 +2424,7 @@ async function parseResumeFile(file) {
       OB.resumeParsed = true;
       OB.parseNote = "";
       const found = [data.parsed.school && "school", data.parsed.skills?.length && `${data.parsed.skills.length} skills`,
-        data.parsed.experience?.length && `${data.parsed.experience.length} roles`, data.parsed.quantifiedWins?.length && `${data.parsed.quantifiedWins.length} wins`]
+        data.parsed.sections?.length && `${data.parsed.sections.length} sections`, data.parsed.experience?.length && `${data.parsed.experience.length} roles`, data.parsed.quantifiedWins?.length && `${data.parsed.quantifiedWins.length} wins`]
         .filter(Boolean).join(" · ");
       toast(`Resume parsed${found ? ": " + found : ""}`);
     } else {
@@ -2453,8 +2706,11 @@ async function finishOnboarding() {
     signoff: `- ${(OB.fullName || "").split(" ")[0] || "Me"}`,
     traits: [...new Set([OB.personaLine, ...(OB.workStyles || [])].filter(Boolean))],
     writingSamples: OB.writingSamples || [],
+    writingSampleTexts: (OB.sampleTexts || []).slice(0, 10),
     quantifiedWins: wins,
     skills: [...new Set([...(parsed.skills || []), ...local.skills])].slice(0, 14),
+    sections: parsed.sections?.length ? parsed.sections : local.sections || [],
+    resumeSections: parsed.sections?.length ? parsed.sections : local.sections || [],
     experience: parsed.experience || [],
     extraContext: parsed.extraContext || "",
     styleProfile: null,
