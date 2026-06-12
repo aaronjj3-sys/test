@@ -3,7 +3,7 @@
 
 import assert from "node:assert";
 import { rankDoors } from "../lib/apollo/scoring.js";
-import { normalizePerson, buildPeopleSearchFilters } from "../lib/apollo/sourcing.js";
+import { normalizePerson, buildPeopleSearchFilters, buildScoringProfile } from "../lib/apollo/sourcing.js";
 import { mockSourcing } from "../lib/knock/mock.js";
 import { BULK_ENRICH_BATCH_SIZE, SEARCH_MODES } from "../lib/knock/constants.js";
 
@@ -108,6 +108,106 @@ assert.deepEqual(fCombo.person_titles, SEARCH_MODES.founders.person_titles, "per
 const fNone = buildPeopleSearchFilters({ mode: SEARCH_MODES.all });
 assert.equal(fNone.q_keywords, undefined, "no filters → no keyword param");
 
-/* 9. key health (informational only) */
+/* 9. scoring differentiates within a page of same-persona results:
+      company signals (industry, keywords, location) must break the tie */
+const richProfile = {
+  ...profile,
+  targetRoles: ["Founder"],
+  locations: ["San Diego"],
+  skills: ["payments"],
+};
+const samePersona = rankDoors(
+  [
+    { id: "plain", name: "P", title: "Founder", companyName: "Acme Labs", signals: {} },
+    {
+      id: "rich", name: "R", title: "Founder", companyName: "Finch",
+      location: "San Diego, California, US",
+      organizationIndustry: "SaaS",
+      organizationKeywords: ["payments", "fintech"],
+      signals: {},
+    },
+  ],
+  richProfile,
+  {}
+);
+assert.equal(samePersona[0].id, "rich", "signal-rich founder must outrank the plain founder");
+assert.ok(samePersona[0].matchScore > samePersona[1].matchScore, "same-persona doors with different signal richness must not tie");
+assert.ok(samePersona[1].matchScore >= 35 && samePersona[1].matchScore <= 55,
+  `persona-only founder should land ~35-50, got ${samePersona[1].matchScore}`);
+assert.ok(samePersona[0].matchScore >= 60 && samePersona[0].matchScore <= 80,
+  `persona+industry+location should land ~60-75, got ${samePersona[0].matchScore}`);
+assert.ok(samePersona[0].matchReasons.some((r) => /SaaS matches your target industries/.test(r)), "industry reason must be human-readable");
+assert.ok(samePersona[0].matchReasons.some((r) => /Based in San Diego near you/.test(r)), "location reason must be human-readable");
+assert.ok(samePersona[0].matchReasons.length <= 3, "max 3 reasons");
+
+/* 10. alumni boost: education in the raw Apollo blob (incl. UC-name variants) */
+const alumniRanked = rankDoors(
+  [
+    {
+      id: "alum", name: "Al", title: "Founder", companyName: "Acme", signals: {},
+      raw: { employment_history: [{ organization_name: "University of California, Irvine", degree: "BA" }] },
+    },
+    { id: "notalum", name: "Na", title: "Founder", companyName: "Acme", signals: {}, raw: {} },
+  ],
+  profile,
+  {}
+);
+assert.equal(alumniRanked[0].id, "alum", "alumni door must rank first");
+assert.ok(alumniRanked[0].matchScore >= alumniRanked[1].matchScore + 20, "alumni boost must be a strong (~25 point) signal");
+assert.ok(alumniRanked[0].matchReasons.some((r) => /Fellow UC Irvine alum/.test(r)), "alumni reason must name the school");
+assert.ok(alumniRanked[0].matchScore >= 60, `alumni founder should score high, got ${alumniRanked[0].matchScore}`);
+
+/* 11. shared-employer boost via preserved employment_history + experience orgs */
+const expProfile = buildScoringProfile({
+  ...profile,
+  experience: [{ role: "Analyst", org: "Mastercard", when: "2024", bullets: [] }],
+});
+assert.deepEqual(expProfile.experienceOrgs, ["Mastercard"], "scoring whitelist must carry experience orgs");
+assert.equal(expProfile.school, "UC Irvine", "scoring whitelist must carry school");
+const sharedRanked = rankDoors(
+  [
+    {
+      id: "shared", name: "S", title: "Founder", companyName: "NewCo", signals: {},
+      employmentHistory: [{ organizationName: "Mastercard Inc.", title: "PM", current: false }],
+    },
+    { id: "stranger", name: "T", title: "Founder", companyName: "NewCo", signals: {} },
+  ],
+  expProfile,
+  {}
+);
+assert.equal(sharedRanked[0].id, "shared", "shared-employer door must rank first");
+assert.ok(sharedRanked[0].matchScore >= sharedRanked[1].matchScore + 18, "shared employer must be a strong (~22 point) signal");
+assert.ok(sharedRanked[0].matchReasons.some((r) => /Worked at Mastercard like you/.test(r)), "shared-employer reason must name the company");
+
+/* 12. deterministic tiebreakers: identical-looking rows still order stably */
+const tied = rankDoors(
+  [
+    { id: "bare", name: "T1", title: "Founder", companyName: "Same", signals: {} },
+    { id: "complete", name: "T2", title: "Founder", companyName: "Same", emailStatus: "verified", linkedinUrl: "x", signals: {} },
+  ],
+  profile,
+  {}
+);
+assert.equal(tied[0].id, "complete", "verified email + linkedin must break the tie");
+assert.ok(tied[0].matchScore > tied[1].matchScore, "tiebreakers must produce distinct scores");
+
+/* 13. normalization preserves the raw Apollo fields scoring needs */
+const np = normalizePerson({
+  id: "p2",
+  first_name: "Ana",
+  employment_history: [{ organization_name: "Mastercard", title: "PM", current: true, start_date: "2024-01-01" }],
+  organization: {
+    name: "Finch", industry: "Financial Services",
+    keywords: ["fintech", "payments"], founded_year: 2022, estimated_num_employees: 40,
+  },
+});
+assert.equal(np.employmentHistory[0].organizationName, "Mastercard", "employment_history must be preserved");
+assert.equal(np.employmentHistory[0].current, true);
+assert.equal(np.organizationIndustry, "Financial Services");
+assert.deepEqual(np.organizationKeywords, ["fintech", "payments"]);
+assert.equal(np.organizationFoundedYear, 2022);
+assert.equal(np.organizationSize, 40);
+
+/* 14. key health (informational only) */
 console.log(`APOLLO_API_KEY: ${process.env.APOLLO_API_KEY ? "present" : "absent (mock mode)"}`);
 console.log("All sourcing tests passed ✓");

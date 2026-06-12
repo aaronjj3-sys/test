@@ -10,6 +10,25 @@ import { draftEmailPrompt, EMAIL_JSON_SCHEMA } from "../../lib/knock/prompts.js"
 import { generateDraftPreview } from "../../lib/knock/drafts.js";
 
 const PREVIEW_CHARS = 90;
+const MAX_SAMPLE_TOTAL_CHARS = 2400; // shared budget across editedSamples + writingSamples
+const MAX_SAMPLES_EACH = 10;
+
+/** Whitelist the user's voice samples through to the prompt builders:
+    up to 10 strings per array (newest first), total chars capped. */
+function capVoiceSamples(profile = {}) {
+  let budget = MAX_SAMPLE_TOTAL_CHARS;
+  const cap = (arr) => (Array.isArray(arr) ? arr : [])
+    .filter((s) => typeof s === "string" && s.trim())
+    .slice(0, MAX_SAMPLES_EACH)
+    .map((s) => {
+      if (budget <= 0) return "";
+      const t = s.slice(0, budget);
+      budget -= t.length;
+      return t;
+    })
+    .filter(Boolean);
+  return { editedSamples: cap(profile.editedSamples), writingSamples: cap(profile.writingSamples) };
+}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
@@ -18,9 +37,10 @@ export default async function handler(req, res) {
 
   const effTone = tone || profile.tone;
   const effStyle = styleProfile || profile.styleProfile;
+  const effProfile = { ...profile, ...capVoiceSamples(profile) };
 
   if (openaiConfigured()) {
-    const { system, prompt } = draftEmailPrompt({ profile, door, tone: effTone, styleProfile: effStyle });
+    const { system, prompt } = draftEmailPrompt({ profile: effProfile, door, tone: effTone, styleProfile: effStyle });
     const out = await openaiJSON({
       system,
       prompt,
@@ -43,7 +63,7 @@ export default async function handler(req, res) {
   }
 
   /* deterministic fallback: same tone + style shaping as the sourcing flow */
-  const d = generateDraftPreview({ ...profile, tone: effTone, styleProfile: effStyle }, door);
+  const d = generateDraftPreview({ ...effProfile, tone: effTone, styleProfile: effStyle }, door);
   return res.status(200).json({
     ok: true,
     source: "template",
