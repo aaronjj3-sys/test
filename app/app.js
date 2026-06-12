@@ -1954,7 +1954,6 @@ function mergeParsedProfile(p, parsed) {
   return bits.join(", ");
 }
 
-<<<<<<< HEAD
 function profileSections(p) {
   const sections = Array.isArray(p.sections) && p.sections.length
     ? p.sections
@@ -1983,33 +1982,14 @@ function renderSectionItem(x) {
     ${(x.bullets || []).length ? `<ul>${(x.bullets || []).map((b) => `<li>${esc(b)}</li>`).join("")}</ul>` : ""}
   </div>`;
 }
-=======
+
 /* resume highlights card: remembers expanded/collapsed across re-renders */
 let rhExpanded = false;
->>>>>>> claude/nifty-hopper-ke37vn
 
 function renderProfile() {
   if (!state.profile) return renderNeedsProfile();
   const p = state.profile;
   const initials = (p.fullName || "?").split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() || "").join("") || "?";
-  const sections = profileSections(p);
-  const totalSectionItems = sectionItemCount(sections);
-  const sectionsExpanded = Boolean(state.profileExpanded.sections);
-  let shownSectionItems = 0;
-  const sectionLimit = 5;
-  const sectionsHtml = sections.map((section) => {
-    const items = [];
-    for (const item of section.items || []) {
-      shownSectionItems += 1;
-      if (!sectionsExpanded && shownSectionItems > sectionLimit) continue;
-      items.push(renderSectionItem(item));
-    }
-    if (!items.length) return "";
-    return `<section class="resume-section">
-      <h4>${esc(section.title)}</h4>
-      <div class="xp">${items.join("")}</div>
-    </section>`;
-  }).join("");
   const samples = p.writingSamples || [];
   const sampleTexts = p.writingSampleTexts || [];
   const samplesExpanded = Boolean(state.profileExpanded.samples);
@@ -2049,21 +2029,6 @@ function renderProfile() {
           <h3>Your story <button class="edit" data-edit="story">Edit</button></h3>
           <p class="story" id="story-text">${p.story ? `“${esc(p.story)}”` : "Add the one or two sentences that make people reply."}</p>
         </div>
-<<<<<<< HEAD
-        <div class="pcard">
-          <h3>Resume highlights <button class="edit" id="xp-add">Edit</button></h3>
-          ${sectionsHtml || `<p class="empty-line">No resume sections added yet. Re-upload your resume or add the roles and wins you want Scout to lead with.</p>`}
-          ${totalSectionItems > sectionLimit ? `<button class="morelink" id="sections-more">${sectionsExpanded ? "Show less" : `Show ${totalSectionItems - sectionLimit} more`}</button>` : ""}
-          <div class="xp" hidden>
-            ${(p.experience || []).map((x, i) => `
-              <div class="xp__item" data-i="${i}">
-                <strong>${esc(x.role)}</strong>
-                <span class="when">${esc(x.org)}${x.when ? " · " + esc(x.when) : ""}</span>
-                <ul>${(x.bullets || []).map((b) => `<li>${esc(b)}</li>`).join("")}</ul>
-                <div class="xp__actions"><button class="edit xp-edit" data-i="${i}">Edit</button><button class="edit xp-del" data-i="${i}">Remove</button></div>
-              </div>`).join("")}
-            ${(p.experience || []).length === 0 ? `<p class="empty-line">No experience added yet. Add the roles and wins you want Scout to lead with.</p>` : ""}
-=======
         <div class="pcard rhcard">
           <h3>Resume highlights</h3>
           <div class="rh-clip ${rhExpanded ? "" : "is-collapsed"}" id="rh-clip">
@@ -2099,7 +2064,6 @@ function renderProfile() {
                 ${(p.experience || []).length === 0 ? `<p class="empty-line">No experience added yet. Add the roles and wins you want Scout to lead with.</p>` : ""}
               </div>
             </div>
->>>>>>> claude/nifty-hopper-ke37vn
           </div>
           <div class="rh-more" id="rh-more" hidden><button class="pill" id="rh-toggle">Show more</button></div>
         </div>
@@ -2304,12 +2268,6 @@ function renderProfile() {
     p.skills = p.skills || [];
     if (!p.skills.includes(v)) p.skills.push(v);
     saveProfile(); renderProfile();
-  });
-
-  $("#sections-more", view)?.addEventListener("click", () => {
-    state.profileExpanded.sections = !state.profileExpanded.sections;
-    save("knock_profile_expanded", state.profileExpanded);
-    renderProfile();
   });
 
   $("#samples-more", view)?.addEventListener("click", () => {
@@ -3001,13 +2959,10 @@ async function finishOnboarding() {
     signoff: `- ${(OB.fullName || "").split(" ")[0] || "Me"}`,
     traits: [...new Set([OB.personaLine, ...(OB.workStyles || [])].filter(Boolean))],
     writingSamples: OB.writingSamples || [],
-<<<<<<< HEAD
     writingSampleTexts: (OB.sampleTexts || []).slice(0, 10),
-=======
     sampleTexts: OB.sampleTexts || [],
     editedSamples: [],
     editedSampleCount: 0,
->>>>>>> claude/nifty-hopper-ke37vn
     quantifiedWins: wins,
     skills: [...new Set([...(parsed.skills || []), ...local.skills])].slice(0, 14),
     sections: parsed.sections?.length ? parsed.sections : local.sections || [],
