@@ -37,6 +37,7 @@ const state = {
   connections: load("knock_connections", { google: false, outlook: false, linkedin: false }),
   autonomy: load("knock_autonomy", { review: true, followups: true, weekends: false, digest: true }),
   knocks: load("knock_left", 15),
+  plan: load("knock_plan", "free"),
   searchMode: load("knock_search_mode", "founders"),
   searchFilters: load("knock_filters", { keywords: [], industries: [], locations: [], companies: [] }),
   sendPrefs: load("knock_send_prefs", null),
@@ -44,7 +45,9 @@ const state = {
   selectedDoors: new Set(),
   trackerTab: "all",
   sourcing: false,
+  prefetchingDoors: false,
 };
+const knockLimit = () => (state.plan === "pro" ? 200 : 15);
 state.connections = {
   google: Boolean(state.connections.google || state.connections.gmail || state.connections.gcal),
   outlook: Boolean(state.connections.outlook),
@@ -57,8 +60,43 @@ const saveLive = () => {
   save("knock_campaigns", state.campaigns);
   save("knock_messages", state.messages);
   save("knock_left", state.knocks);
+  save("knock_plan", state.plan);
 };
 const doorById = (id) => (state.doors || []).find((d) => d.id === id);
+const msgById = (id) => state.messages.find((m) => m.id === id);
+const latestMsgForDoor = (doorId) => {
+  for (let i = state.messages.length - 1; i >= 0; i--) {
+    if (state.messages[i].doorId === doorId) return state.messages[i];
+  }
+  return null;
+};
+
+/* email content hygiene: no em dashes in anything Scout sends */
+const noEmDash = (s) => String(s ?? "").replace(/\s+—\s+/g, ", ").replace(/—/g, "-");
+
+/* the authenticated user id (Supabase uuid, or "dev" in dev mode) */
+const userId = () => window.knockAuth?.user?.id || "dev";
+
+/* ---------------- message status vocabulary ---------------- */
+const STATUS_UI = {
+  drafting: ["Drafting", "drafting"],
+  queued: ["Queued", "queued"],
+  paused: ["Paused", "paused"],
+  scheduled: ["Scheduled", "scheduled"],
+  sending: ["Sending", "sending"],
+  sent: ["Sent", "sent"],
+  followup_sent: ["Followed up", "followup"],
+  opened: ["Opened", "opened"],
+  replied: ["Replied", "replied"],
+  needs_review: ["Reply drafted, review", "review"],
+  waiting_gmail: ["Connect Gmail", "gmail"],
+  failed: ["Failed", "failed"],
+  meeting: ["Meeting booked", "meeting"],
+};
+function stChip(status) {
+  const [label, cls] = STATUS_UI[status] || [status, "drafted"];
+  return `<span class="st st--${cls}"><i></i>${esc(label)}</span>`;
+}
 
 /* ---------------- icons (inline SVG, currentColor) ---------------- */
 const I = {
@@ -201,9 +239,13 @@ function bumpStreak() {
 
 function updateChrome() {
   $("#knocks-left").textContent = state.knocks;
-  $("#knocks-bar").style.width = Math.max(0, Math.min(100, (state.knocks / 15) * 100)) + "%";
+  $("#knocks-bar").style.width = Math.max(0, Math.min(100, (state.knocks / knockLimit()) * 100)) + "%";
+  const planEl = $(".knocks-card__plan");
+  if (planEl) planEl.textContent = state.plan === "pro" ? "Pro plan · resets monthly" : "Free plan · resets monthly";
   const badge = $("#inbox-badge");
-  badge.hidden = true;
+  const needsReview = state.messages.filter((m) => m.status === "needs_review").length;
+  badge.hidden = needsReview === 0;
+  badge.textContent = needsReview;
   const streak = bumpStreak();
   $("#streak").innerHTML = `<i></i>${streak}-day streak`;
 }
@@ -221,6 +263,9 @@ function navigate() {
   view.scrollTop = 0;
   fn();
   updateChrome();
+  /* reply/follow-up sync only runs while dashboard or tracker is on screen */
+  if (route === "dashboard" || route === "people" || route === "tracker") startSyncPolling();
+  else stopSyncPolling();
 }
 window.addEventListener("hashchange", navigate);
 
@@ -236,10 +281,12 @@ function greeting() {
 }
 
 const SEARCH_MODES_UI = [
+  ["all", "All"],
   ["founders", "Founders"], ["hiring_managers", "Hiring managers"],
   ["investors", "Investors"], ["operators", "Operators"],
 ];
 const modeLabel = (id) => (SEARCH_MODES_UI.find(([m]) => m === id) || [, "Founders"])[1];
+const noFiltersActive = () => Object.values(state.searchFilters || {}).every((arr) => !(arr || []).length);
 
 function renderDashboard() {
   if (!state.profile) return renderNeedsProfile();
@@ -302,14 +349,21 @@ async function runSourcing() {
     const res = await fetch("/api/sourcing/apollo", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ profile: state.profile, searchMode: state.searchMode, filters: state.searchFilters, limit: 100 }),
+      body: JSON.stringify({ profile: state.profile, searchMode: state.searchMode, mode: state.searchMode, filters: state.searchFilters, limit: 100, page: 1 }),
     });
     const data = await res.json();
     clearInterval(ticker);
     state.sourcing = false;
     if (!res.ok) throw new Error(data.error || "Sourcing failed");
     state.doors = data.doors;
-    state.doorsMeta = data.meta;
+    const perPage = data.meta?.perPage || PAGE_SIZE;
+    state.doorsMeta = {
+      ...data.meta,
+      perPage,
+      /* the initial fetch covers pages 1..N worth of doors */
+      apolloPage: Math.max(data.meta?.page || 1, Math.ceil((data.doors || []).length / perPage)),
+      hasMore: data.meta?.hasMore === true,
+    };
     state.doorsPage = 0;
     state.selectedDoors = new Set();
     saveLive();
@@ -330,10 +384,11 @@ async function runSourcing() {
 }
 
 function doorRow(d, queuedIds) {
+  const msg = queuedIds.has(d.id) ? latestMsgForDoor(d.id) : null;
   return `
     <tr data-id="${d.id}" class="${queuedIds.has(d.id) ? "is-queued" : ""}">
-      <td>${queuedIds.has(d.id)
-        ? '<span class="st st--sent"><i></i>queued</span>'
+      <td class="door-st">${queuedIds.has(d.id)
+        ? stChip(msg?.status || "queued")
         : `<input type="checkbox" class="door-check" data-id="${d.id}" ${state.selectedDoors.has(d.id) ? "checked" : ""}>`}</td>
       <td><div class="cell-who"><div><strong>${esc(d.name)}</strong><small>${esc(d.title || "")}${d.location ? " · " + esc(d.location) : ""}</small></div></div></td>
       <td>${d.companyName ? `<div class="cell-co">${logo(d.companyName, d.companyDomain, 24)}<span>${esc(d.companyName)}</span></div>` : "·"}</td>
@@ -350,13 +405,75 @@ function pager(total, page, idPrefix) {
   if (pages <= 1) return "";
   const from = page * PAGE_SIZE + 1;
   const to = Math.min(total, (page + 1) * PAGE_SIZE);
+  const loading = idPrefix === "doors" && state.prefetchingDoors;
   return `<div class="pager" id="${idPrefix}-pager">
     <span class="pager__hint">Showing ${from}–${to} of ${total}</span>
     <button class="btn btn--paper btn--sm" data-p="${page - 1}" ${page === 0 ? "disabled" : ""}>← Prev</button>
     ${Array.from({ length: pages }, (_, i) =>
       `<button class="pager__num ${i === page ? "is-on" : ""}" data-p="${i}">${i + 1}</button>`).join("")}
     <button class="btn btn--paper btn--sm" data-p="${page + 1}" ${page >= pages - 1 ? "disabled" : ""}>Next →</button>
+    ${loading ? `<span class="pager__loading"><i></i>finding more…</span>` : ""}
   </div>`;
+}
+
+/* ---- background pagination: when the user hits the last loaded UI page,
+   quietly pull the next Apollo page and grow the pager ---- */
+async function prefetchNextDoorsPage() {
+  const meta = state.doorsMeta || {};
+  if (state.prefetchingDoors || !state.profile || !(state.doors || []).length) return;
+  if (meta.hasMore !== true) return;
+  state.prefetchingDoors = true;
+  refreshDoorsPager();
+  const nextPage = (meta.apolloPage || Math.ceil(state.doors.length / PAGE_SIZE)) + 1;
+  try {
+    const res = await fetch("/api/sourcing/apollo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile: state.profile, searchMode: state.searchMode, mode: state.searchMode, filters: state.searchFilters, page: nextPage, limit: PAGE_SIZE }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "prefetch failed");
+    const seenIds = new Set(state.doors.map((d) => d.id));
+    const seenApollo = new Set(state.doors.map((d) => d.apolloPersonId).filter(Boolean));
+    const fresh = (data.doors || []).filter((d) =>
+      !seenIds.has(d.id) && !(d.apolloPersonId && seenApollo.has(d.apolloPersonId)));
+    state.doors.push(...fresh);
+    state.doorsMeta = {
+      ...meta,
+      ...data.meta,
+      apolloPage: nextPage,
+      hasMore: data.meta?.hasMore === true && fresh.length > 0,
+    };
+    saveLive();
+  } catch {
+    /* network hiccup or API offline: stop trying this session, retry on next sourcing */
+    state.doorsMeta = { ...meta, hasMore: false };
+  } finally {
+    state.prefetchingDoors = false;
+    refreshDoorsPager();
+  }
+}
+
+/* targeted pager refresh, keeps table scroll position intact */
+function refreshDoorsPager() {
+  if ((location.hash.replace("#", "") || "dashboard") !== "dashboard") return;
+  const old = $("#doors-pager", view);
+  if (!old) return;
+  const doors = state.doors || [];
+  const page = Math.min(state.doorsPage, Math.max(0, Math.ceil(doors.length / PAGE_SIZE) - 1));
+  const holder = document.createElement("div");
+  holder.innerHTML = pager(doors.length, page, "doors");
+  const next = holder.firstElementChild;
+  if (next) { old.replaceWith(next); wireDoorsPager(); }
+}
+
+function wireDoorsPager() {
+  $("#doors-pager", view)?.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-p]");
+    if (!b || b.disabled) return;
+    state.doorsPage = +b.dataset.p;
+    renderDoorsQueue();
+  });
 }
 
 /* ---- search filters: what Apollo lets us slice on, right from the dashboard ---- */

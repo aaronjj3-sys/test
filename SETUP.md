@@ -85,23 +85,27 @@ Works out of the box on Supabase's built-in mailer (rate-limited, fine for
 testing). For production, plug a custom SMTP (Resend/Postmark) into
 Supabase → Authentication → Email so links come from your domain.
 
-## 6. Gmail sending + reply watching — the next build step
+## 6. Gmail sending + reply watching — built, needs credentials
 
-This is the one integration that needs real build time after credentials:
+The integration is implemented (`lib/gmail/`, `api/gmail/send.js`,
+`api/gmail/sync.js`, `api/cron/monitor.js`). To turn it on:
 
-1. Same Google Cloud project → enable **Gmail API**.
-2. Create a second OAuth client (or extend the first) with scopes
-   `gmail.send` + `gmail.readonly` — this is the separate "Connect Gmail"
-   flow, not login.
-3. Add `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` to `.env.local`.
-4. For reply detection: enable Cloud Pub/Sub, create a topic, grant
-   `gmail-api-push@system.gserviceaccount.com` publish rights.
+1. Same Google Cloud project → enable **Gmail API** + **Calendar API**.
+2. The "Connect Google" flow (`api/google/connect.js`) already requests
+   `gmail.send`, `gmail.readonly`, `gmail.compose`, `calendar.events`,
+   `calendar.readonly` — separate from login.
+3. Add `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` to `.env.local`, and run
+   `supabase/migrations/003_sending.sql` in the SQL editor.
+4. Set `CRON_SECRET` in Vercel env. Reply detection + follow-ups run via
+   polling: the app syncs live whenever it's open (`/api/gmail/sync`), and
+   the Vercel cron (`/api/cron/monitor`, see vercel.json) covers off-hours —
+   note Hobby plan crons run once daily.
 5. Heads-up: sending scopes are "restricted" — Google requires app
    verification (a few days, free) before non-test users can connect.
 
-Until then campaigns queue honestly and the UI says so. The architecture
-(drip caps 10–25/day for new users, working-hours spacing, pause + do-not-
-contact states) is documented in `lib/gmail/`.
+Guardrails: monthly knock limits (15 free / 200 pro), review-before-sending
+on by default (suggested replies/follow-ups land as Gmail drafts), follow-ups
+3 days apart, max 2, weekends optional.
 
 ## 7. Stripe billing — ~45 minutes when ready
 
@@ -133,6 +137,6 @@ users who landed replies/roles there; until then consider the label
 
 1. ✅ today: Apollo key in `.env.local` → live sourcing works
 2. Supabase project + Google login → real accounts
-3. Gmail connect + drip sending + reply classification (next coding session)
+3. ✅ Gmail connect + sending + reply classification (built — add credentials)
 5. Stripe billing
 6. Deploy to Vercel
