@@ -1964,7 +1964,7 @@ function renderProfile() {
   const skillInput = $("#skill-add", view);
   /* normal pill footprint: width fits the placeholder, grows as you type */
   skillInput.addEventListener("input", () => {
-    skillInput.style.width = Math.min(240, Math.max(96, skillInput.value.length * 7 + 36)) + "px";
+    skillInput.style.width = Math.min(240, Math.max(112, skillInput.value.length * 7 + 36)) + "px";
   });
   skillInput.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;

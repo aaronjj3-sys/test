@@ -54,20 +54,30 @@ for (let r = 0; r < 3; r++) {
 }
 
 /* ---------------- auth-gated CTAs ----------------
-   Every "start knocking" button opens the login overlay unless a
-   session already exists, in which case it goes straight to the app. */
-let isAuthed = false;
-window.knockAuth?.ready?.then((u) => { isAuthed = !!u; });
+   Every "start knocking" button goes straight to the app when a session
+   exists. The session check is awaited on click, so an early click can
+   never flash the login overlay at someone who is already signed in. */
+const authReady = window.knockAuth?.ready || Promise.resolve(null);
+let authedUser = null;
+authReady.then((u) => {
+  authedUser = u || null;
+  if (!authedUser) return;
+  /* small signed-in affordance: the nav CTA becomes "Open app" */
+  const navCta = document.querySelector('#nav a.btn[href="app/index.html"]');
+  if (navCta) navCta.textContent = "Open app →";
+});
 document.querySelectorAll('a[href="app/index.html"]').forEach((a) => {
-  a.addEventListener("click", (e) => {
-    if (isAuthed) return; /* logged in: continue to the app */
+  a.addEventListener("click", async (e) => {
+    if (authedUser) return; /* session known: continue straight to the app */
     e.preventDefault();
-    window.knockAuth?.openLogin();
+    const u = await authReady; /* wait for the session check, never assume logged-out */
+    if (u) location.href = a.href;
+    else window.knockAuth?.openLogin();
   });
 });
 if (location.hash === "#login") {
   history.replaceState(null, "", location.pathname);
-  window.knockAuth?.ready?.then((u) => { if (!u) window.knockAuth.openLogin(); });
+  authReady.then((u) => { if (!u) window.knockAuth?.openLogin(); });
 }
 
 /* ---------------- contact form ---------------- */
