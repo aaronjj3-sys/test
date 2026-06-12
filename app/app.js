@@ -41,6 +41,14 @@ const state = {
   searchMode: load("knock_search_mode", "founders"),
   searchFilters: load("knock_filters", { keywords: [], industries: [], locations: [], companies: [] }),
   sendPrefs: load("knock_send_prefs", null),
+  apolloUsage: load("knock_apollo_usage", {
+    configured: false,
+    apiDayLeft: null,
+    apiDayLimit: null,
+    enrichCreditsUsed: 0,
+    peopleSearched: 0,
+    updatedAt: null,
+  }),
   doorsPage: 0,
   selectedDoors: new Set(),
   trackerTab: "all",
@@ -48,6 +56,7 @@ const state = {
   prefetchingDoors: false,
 };
 const knockLimit = () => (state.plan === "pro" ? 200 : 15);
+const saveApolloUsage = () => save("knock_apollo_usage", state.apolloUsage);
 state.connections = {
   google: Boolean(state.connections.google || state.connections.gmail || state.connections.gcal),
   outlook: Boolean(state.connections.outlook),
@@ -89,7 +98,7 @@ const STATUS_UI = {
   opened: ["Opened", "opened"],
   replied: ["Replied", "replied"],
   needs_review: ["Reply drafted, review", "review"],
-  waiting_gmail: ["Connect Gmail", "gmail"],
+  waiting_gmail: ["Connect Google", "gmail"],
   failed: ["Failed", "failed"],
   meeting: ["Meeting booked", "meeting"],
 };
@@ -242,12 +251,62 @@ function updateChrome() {
   $("#knocks-bar").style.width = Math.max(0, Math.min(100, (state.knocks / knockLimit()) * 100)) + "%";
   const planEl = $(".knocks-card__plan");
   if (planEl) planEl.textContent = state.plan === "pro" ? "Pro plan · resets monthly" : "Free plan · resets monthly";
+  updateApolloCard();
   const badge = $("#inbox-badge");
   const needsReview = state.messages.filter((m) => m.status === "needs_review").length;
   badge.hidden = needsReview === 0;
   badge.textContent = needsReview;
   const streak = bumpStreak();
   $("#streak").innerHTML = `<i></i>${streak}-day streak`;
+}
+
+function updateApolloCard() {
+  const status = $("#apollo-status-pill");
+  if (!status) return;
+  const u = state.apolloUsage || {};
+  status.textContent = u.configured ? "live" : "demo";
+  status.classList.toggle("is-off", !u.configured);
+  const api = $("#apollo-api-left");
+  if (api) {
+    api.textContent = Number.isFinite(u.apiDayLeft) && Number.isFinite(u.apiDayLimit)
+      ? `${u.apiDayLeft}/${u.apiDayLimit}`
+      : u.configured ? "live" : "off";
+  }
+  const credits = $("#apollo-credit-used");
+  if (credits) credits.textContent = String(u.enrichCreditsUsed || 0);
+  const note = $("#apollo-note");
+  if (note) {
+    note.textContent = u.configured
+      ? "Emails use enrichment credits only after approval."
+      : "Set APOLLO_API_KEY for live sourcing.";
+  }
+}
+
+function noteApolloSearch(meta = {}) {
+  state.apolloUsage.peopleSearched = (state.apolloUsage.peopleSearched || 0) + Number(meta.searchedPeople || 0);
+  if (Number(meta.enrichedPeople) > 0) {
+    state.apolloUsage.enrichCreditsUsed = (state.apolloUsage.enrichCreditsUsed || 0) + Number(meta.enrichedPeople || 0);
+  }
+  state.apolloUsage.updatedAt = new Date().toISOString();
+  saveApolloUsage();
+  updateApolloCard();
+}
+
+async function refreshApolloUsage() {
+  try {
+    const res = await fetch("/api/apollo/usage");
+    const data = await res.json();
+    state.apolloUsage.configured = Boolean(data.configured);
+    if (data.daily) {
+      state.apolloUsage.apiDayLeft = data.daily.left;
+      state.apolloUsage.apiDayLimit = data.daily.limit;
+    }
+    state.apolloUsage.updatedAt = new Date().toISOString();
+    saveApolloUsage();
+    updateApolloCard();
+  } catch {
+    updateApolloCard();
+  }
 }
 
 /* ============================================================
@@ -365,6 +424,7 @@ async function runSourcing() {
     };
     state.doorsPage = 0;
     state.selectedDoors = new Set();
+    noteApolloSearch(data.meta);
     saveLive();
     toast(`${data.doors.length} doors found${data.doors[0]?.source === "mock" ? " (demo data, Apollo key not configured)" : ""}`);
     if ((location.hash.replace("#", "") || "dashboard") === "dashboard") renderDoorsQueue();
@@ -443,6 +503,7 @@ async function prefetchNextDoorsPage() {
       apolloPage: nextPage,
       hasMore: data.meta?.hasMore === true && fresh.length > 0,
     };
+    noteApolloSearch(data.meta);
     saveLive();
   } catch {
     /* network hiccup or API offline: stop trying this session, retry on next sourcing */
@@ -905,7 +966,7 @@ function openLaunchReview(selected) {
   openModal(`
     <h2>Approve &amp; launch ${n} knock${n === 1 ? "" : "s"}</h2>
     <p class="sub">Scout finalizes each draft in your voice, then sends from your Gmail one by one. You'll see every status live. ${state.knocks} knock${state.knocks === 1 ? "" : "s"} left this month.</p>
-    ${googleConnected() ? "" : `<p class="connlist__fine">Google isn't connected yet, so these will wait safely as "Connect Gmail" until you connect it.</p>`}
+    ${googleConnected() ? "" : `<p class="connlist__fine">Google isn't connected yet, so these will wait safely as "Connect Google" until you connect it.</p>`}
     <label>Send later (optional)</label>
     <input type="datetime-local" id="lc-when">
     <p class="connlist__fine">Leave empty to send now. Pick a time and Gmail delivers them then.</p>
@@ -947,6 +1008,7 @@ async function runLaunch(selected, scheduleAt) {
         body: noEmDash(m.body),
         name: d?.name, title: d?.title, company: d?.companyName, companyDomain: d?.companyDomain,
         to: m.to || m.toEmail || d?.email || "",
+        toName: m.toName || d?.name || "",
         scheduleAt: scheduleAt || m.scheduledAt || null,
       });
     }
@@ -999,6 +1061,73 @@ async function processSendQueue() {
   }
 }
 
+async function enrichDoorForEmail(d) {
+  if (!d || d.email || !d.apolloPersonId) return d?.email || "";
+  try {
+    const res = await fetch("/api/sourcing/enrich", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ doors: [d] }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || "Apollo enrichment failed");
+    const enriched = (data.enriched || []).find((x) => x.id === d.id || x.apolloPersonId === d.apolloPersonId);
+    if (enriched?.email) {
+      d.email = enriched.email;
+      d.emailStatus = enriched.emailStatus || d.emailStatus;
+    }
+    if (data.meta?.creditsLikelyUsed) {
+      state.apolloUsage.enrichCreditsUsed = (state.apolloUsage.enrichCreditsUsed || 0) + Math.max(1, Number(data.meta.enrichedPeople || 0));
+      state.apolloUsage.updatedAt = new Date().toISOString();
+      saveApolloUsage();
+      updateApolloCard();
+    }
+    saveLive();
+    return d.email || "";
+  } catch (err) {
+    return "";
+  }
+}
+
+async function ensureMessageReady(m, d) {
+  if (d) {
+    m.to = m.to || d.email || "";
+    m.toName = m.toName || d.name || "";
+    m.subject = noEmDash(m.subject || d.draft?.subject || "quick question");
+    m.body = noEmDash(m.body || d.draft?.body || d.draft?.preview || "");
+  }
+
+  if (d && (!m.subject || !m.body || !d.draft?.body)) {
+    setMsgStatus(m, "drafting");
+    try {
+      const res = await fetch("/api/knock/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profile: state.profile, door: d, tone: state.profile?.tone, styleProfile: state.profile?.styleProfile }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok && data.draft) {
+        m.subject = noEmDash(data.draft.subject || m.subject);
+        m.body = noEmDash(data.draft.body || m.body);
+        d.draft = { ...(d.draft || {}), ...data.draft, subject: m.subject, body: m.body, source: data.source };
+      }
+    } catch { /* deterministic draft route fallback may still be unavailable locally */ }
+  }
+
+  if (!m.to && d?.apolloPersonId) {
+    setMsgStatus(m, "drafting");
+    m.to = await enrichDoorForEmail(d);
+  }
+
+  m.subject = noEmDash(m.subject || "quick question");
+  m.body = noEmDash(m.body || "");
+  saveLive();
+
+  if (!m.to) return { ok: false, error: "No verified email found. Apollo enrichment did not return one." };
+  if (!m.subject || !m.body) return { ok: false, error: "Draft is missing a subject or body. Review the knock, then retry." };
+  return { ok: true };
+}
+
 async function processSingleSend(m) {
   const d = doorById(m.doorId);
   /* 1 · drafting: upgrade template previews into a real AI draft */
@@ -1019,6 +1148,12 @@ async function processSingleSend(m) {
     } catch { /* template draft still sends fine */ }
   }
   /* 2 · sending */
+  const ready = await ensureMessageReady(m, d);
+  if (!ready.ok) {
+    m.error = ready.error;
+    setMsgStatus(m, "failed");
+    return "failed";
+  }
   setMsgStatus(m, "sending");
   try {
     const res = await fetch("/api/gmail/send", {
@@ -1028,7 +1163,7 @@ async function processSingleSend(m) {
         userId: userId(),
         message: {
           id: m.id, doorId: m.doorId, campaignId: m.campaignId,
-          to: m.to || d?.email || "", toName: m.name || d?.name || "",
+          to: m.to, toName: m.toName || m.name || d?.name || "",
           subject: noEmDash(m.subject), body: noEmDash(m.body),
         },
         scheduleAt: m.scheduleAt || undefined,
@@ -1711,19 +1846,22 @@ function renderProfile() {
     p.resumeFileName = f.name;
     const text = await readFileText(f);
     if (text) p.resumeText = text;
-    const parsed = await requestResumeParse(f);
-    if (parsed) {
-      const summary = mergeParsedProfile(p, parsed);
+    const parsedResult = await requestResumeParse(f);
+    if (parsedResult?.parsed) {
+      const summary = mergeParsedProfile(p, parsedResult.parsed);
       saveProfile(); renderProfile(); initAccount();
-      toast(`Resume re-parsed${summary ? ": " + summary : ""}`);
+      toast(`Resume parsed${summary ? ": " + summary : ""}`);
     } else {
       /* parser offline: local extraction, still non-destructive */
       const facts = extractProfileFacts((text || "") + " " + (p.story || ""));
+      const hadFacts = Boolean(facts.wins.length || facts.skills.length || facts.school);
       if (facts.wins.length) p.quantifiedWins = facts.wins;
       if (!p.school && facts.school) p.school = facts.school;
       p.skills = [...new Set([...(p.skills || []), ...facts.skills])].slice(0, 14);
       saveProfile(); renderProfile();
-      toast("Resume saved. Parser is offline, so existing details were kept");
+      toast(hadFacts
+        ? "Resume saved. Scout pulled what it could locally"
+        : (parsedResult?.note || "Resume saved. Scout could not read text from this file yet"));
     }
   });
 }
@@ -1968,8 +2106,12 @@ async function requestResumeParse(file) {
       body: JSON.stringify({ fileName: file.name, contentBase64: await fileToBase64(file) }),
     });
     const data = await res.json();
-    return data.ok && data.parsed ? data.parsed : null;
-  } catch { return null; }
+    return data.ok && data.parsed
+      ? { parsed: data.parsed, source: data.source, note: data.note || "" }
+      : { parsed: null, source: data.source || "none", note: data.note || "Parser could not read this file." };
+  } catch {
+    return { parsed: null, source: "offline", note: "Parser is offline. Try again after the dev server restarts." };
+  }
 }
 
 /* upload the resume to the parser; falls back to raw text + local extraction */
@@ -2450,6 +2592,7 @@ $("#acct-tour")?.addEventListener("click", () => { $("#acct-menu").hidden = true
   initAccount();
   navigate();
   syncConnections();
+  refreshApolloUsage();
   if (!state.profile) openOnboarding(1);
 
   /* resume the send pipeline after a reload or an OAuth round-trip:

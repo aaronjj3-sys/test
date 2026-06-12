@@ -72,5 +72,8 @@ export default async function handler(req, res) {
     textExtracted: true,
     source,
     parsed: merged,
+    note: source === "deterministic"
+      ? "AI parser unavailable; deterministic resume extraction ran instead."
+      : "",
   });
 }

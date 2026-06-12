@@ -21,6 +21,7 @@ const requiredFiles = [
 
 const apiRoutes = [
   "api/test-apollo.js",
+  "api/apollo/usage.js",
   "api/campaigns/create.js",
   "api/dashboard/doors.js",
   "api/google/callback.js",
@@ -32,6 +33,7 @@ const apiRoutes = [
   "api/profile/parse-resume.js",
   "api/profile/analyze-style.js",
   "api/sourcing/apollo.js",
+  "api/sourcing/enrich.js",
   "api/sourcing/mock.js",
 ];
 

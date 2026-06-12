@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,400..900;1,400..900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="app.css?v=20260612-live-send" />
+  <link rel="stylesheet" href="app.css?v=20260612-parser-enrich" />
 </head>
 <body>
 
@@ -43,6 +43,21 @@
       </nav>
 
       <div class="side__foot">
+        <div class="apollo-card" id="apollo-card">
+          <div class="apollo-card__row">
+            <span>Apollo usage</span>
+            <strong id="apollo-status-pill">checking</strong>
+          </div>
+          <div class="apollo-card__metric">
+            <small>API today</small>
+            <b id="apollo-api-left">...</b>
+          </div>
+          <div class="apollo-card__metric">
+            <small>Enrich credits used</small>
+            <b id="apollo-credit-used">0</b>
+          </div>
+          <span class="apollo-card__note" id="apollo-note">People search stays credit-free.</span>
+        </div>
         <div class="knocks-card">
           <div class="knocks-card__row">
             <span>Knocks left</span>
@@ -91,7 +106,7 @@
 
   <script src="../vendor/supabase.js"></script>
   <script src="config.js" onerror="void 0"></script>
-  <script src="auth.js?v=20260612-live-send"></script>
-  <script src="app.js?v=20260612-live-send"></script>
+  <script src="auth.js?v=20260612-parser-enrich"></script>
+  <script src="app.js?v=20260612-parser-enrich"></script>
 </body>
 </html>
