@@ -26,6 +26,13 @@ const MIME = {
   ".jpg": "image/jpeg", ".webp": "image/webp", ".ico": "image/x-icon", ".woff2": "font/woff2",
 };
 
+function browserConfig() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !supabaseAnonKey) return null;
+  return `window.KNOCK_CONFIG = {\n  supabaseUrl: ${JSON.stringify(supabaseUrl)},\n  supabaseAnonKey: ${JSON.stringify(supabaseAnonKey)},\n};\n`;
+}
+
 function vercelRes(res) {
   res.status = (code) => { res.statusCode = code; return res; };
   res.json = (obj) => { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify(obj)); };
@@ -54,6 +61,14 @@ async function handleApi(req, res, pathname) {
 
 const server = http.createServer(async (req, res) => {
   const { pathname } = new URL(req.url, `http://localhost:${PORT}`);
+
+  if (pathname === "/app/config.js") {
+    const config = browserConfig();
+    if (!config) { res.statusCode = 404; return res.end("Supabase browser config is not set"); }
+    res.setHeader("Content-Type", "text/javascript");
+    res.setHeader("Cache-Control", "no-store");
+    return res.end(config);
+  }
 
   if (pathname.startsWith("/api/")) return handleApi(req, res, pathname);
 

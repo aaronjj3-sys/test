@@ -1997,9 +1997,9 @@ function renderSettings() {
   }));
   $$(".conn-off", view).forEach((b) => b.addEventListener("click", () => disconnectProvider(b.dataset.id)));
 
-  fetch("/api/test-apollo").then((r) => r.json()).then((d) => {
+  fetch("/api/apollo/usage").then((r) => r.json()).then((d) => {
     const el = $("#apollo-status", view);
-    if (el) el.textContent = d.apolloConfigured
+    if (el) el.textContent = d.configured
       ? "Server configured · live sourcing on"
       : "Mock mode · set APOLLO_API_KEY in .env.local for live sourcing";
   }).catch(() => {

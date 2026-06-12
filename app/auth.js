@@ -1,7 +1,7 @@
 /* Knock auth.
    Loaded by BOTH the landing page and the app shell.
 
-   With app/config.js (Supabase URL + anon key) present, real auth runs:
+   With Supabase browser env vars present, real auth runs:
    Google OAuth or an email magic link via Supabase.
    Without it, a clearly-labeled dev login is offered so the product can
    be tested end to end with no credentials.
@@ -83,7 +83,7 @@
           <button class="authbtn authbtn--accent" type="submit">Email me a magic link</button>
         </form>` : `
         <button class="authbtn authbtn--accent" id="auth-dev">Continue with dev login</button>
-        <p class="authgate__note">Supabase is not configured, so Google sign-in and magic links are off. Add app/config.js (see SETUP.md) to turn them on.</p>`}
+        <p class="authgate__note">Supabase is not configured, so Google sign-in and magic links are off. Set the Supabase env vars and restart the dev server to turn them on.</p>`}
         <p class="authgate__note" id="auth-note"></p>
         <p class="authgate__fine">By continuing you agree to Knock's <a href="${inApp ? "../" : ""}terms.html">Terms</a> and <a href="${inApp ? "../" : ""}privacy.html">Privacy Policy</a>.</p>
       </div>`;

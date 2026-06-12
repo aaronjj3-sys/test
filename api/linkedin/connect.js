@@ -1,7 +1,7 @@
 /* GET /api/linkedin/connect?user_id=...&return_to=...
    Starts the LinkedIn OAuth flow (OpenID Connect: identity only — LinkedIn
    does not expose messaging APIs to standard apps). Set LINKEDIN_CLIENT_ID
-   and LINKEDIN_CLIENT_SECRET (see SETUP.md) and this whole flow works. */
+   and LINKEDIN_CLIENT_SECRET (see docs/SETUP.md) and this whole flow works. */
 
 const SCOPES = ["openid", "profile", "email"].join(" ");
 

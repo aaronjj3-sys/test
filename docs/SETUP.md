@@ -33,14 +33,15 @@ only runs on approved leads, max 10 per action.
 1. Create a project at https://supabase.com (free tier is fine).
 2. SQL Editor → paste and run `supabase/migrations/001_init.sql`
    (creates profiles/doors/campaigns/messages/oauth tables with RLS).
-3. Project Settings → API: copy the **URL** and **anon public key**.
-4. Copy `app/config.example.js` → `app/config.js` and fill both in
-   (these two are safe for the browser; RLS protects the data).
+3. Project Settings -> API: copy the **URL** and **anon public key**.
+4. Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` to
+   `.env.local` and Vercel env vars. These two are safe for the browser; RLS
+   protects the data.
 5. Add `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to `.env.local`
-   (server-side only — never put the service role key in app/config.js).
+   (server-side only; never expose the service role key to the browser).
 
-The app automatically switches from dev mode to a real login gate once
-`app/config.js` exists.
+The app automatically switches from dev mode to a real login gate once those
+Supabase env vars are present and the dev server has restarted.
 
 ## 3. Google login — ~20 minutes
 

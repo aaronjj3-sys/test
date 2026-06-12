@@ -63,7 +63,7 @@ npm test           # sourcing/scoring checks
 ```
 
 Copy `.env.example` → `.env.local` and add `APOLLO_API_KEY` for live sourcing;
-without it the app runs in clearly-labeled mock mode. See `SETUP.md` for the
+without it the app runs in clearly-labeled mock mode. See `docs/SETUP.md` for the
 full go-live checklist (Supabase auth, Google/LinkedIn login, Gmail, Stripe).
 
 ## The live MVP layer
@@ -75,12 +75,12 @@ full go-live checklist (Supabase auth, Google/LinkedIn login, Gmail, Stripe).
   backoff, no key leakage), People Search (credit-free) → normalize → score
   0–100 with reasons → deterministic draft previews; enrichment is opt-in and
   capped at 10
-- **API routes** (`api/`): `test-apollo`, `sourcing/apollo`, `sourcing/mock`,
+- **API routes** (`api/`): `sourcing/apollo`, `sourcing/mock`,
   `dashboard/doors`, `campaigns/create` — Vercel-compatible handlers, served
   locally by `server.js`
 - **Auth** (`app/auth.js`): the landing page gates every CTA behind a login
-  overlay (Google OAuth or email magic link via Supabase when `app/config.js`
-  exists; a labeled dev login otherwise). The app redirects signed-out
+  overlay (Google OAuth or email magic link via Supabase when browser env vars
+  exist; a labeled dev login otherwise). The app redirects signed-out
   visitors back to the landing page
 - **Onboarding**: resume drag-and-drop → about you → target paths → people +
   locations → voice + personality. The saved profile powers sourcing, which
@@ -96,4 +96,4 @@ full go-live checklist (Supabase auth, Google/LinkedIn login, Gmail, Stripe).
 - `supabase/migrations/`, database schema with RLS
 - `assets/`, app UI screenshots + `assets/logos/` brand SVGs for the marquee
 - `vendor/`, GSAP, ScrollTrigger, Lenis, supabase-js
-- `SETUP.md`, the go-live checklist (what only you can do)
+- `docs/SETUP.md`, the go-live checklist (what only you can do)

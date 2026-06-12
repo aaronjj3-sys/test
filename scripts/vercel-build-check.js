@@ -20,16 +20,20 @@ const requiredFiles = [
 ];
 
 const apiRoutes = [
-  "api/test-apollo.js",
   "api/apollo/usage.js",
   "api/campaigns/create.js",
+  "api/connections/disconnect.js",
+  "api/connections/status.js",
+  "api/cron/monitor.js",
   "api/dashboard/doors.js",
+  "api/gmail/send.js",
+  "api/gmail/sync.js",
   "api/google/callback.js",
   "api/google/connect.js",
+  "api/knock/draft.js",
+  "api/knock/improve.js",
   "api/linkedin/callback.js",
   "api/linkedin/connect.js",
-  "api/connections/status.js",
-  "api/connections/disconnect.js",
   "api/profile/parse-resume.js",
   "api/profile/analyze-style.js",
   "api/sourcing/apollo.js",
@@ -50,19 +54,11 @@ const appStaticFiles = [
   "app.css",
   "app.js",
   "auth.js",
-  "data.js",
-  "config.example.js",
 ];
 
 const optionalStaticDirs = [
   "assets",
   "vendor",
-  "css",
-  "js",
-  "images",
-  "logos",
-  "styles",
-  "components",
 ];
 
 const missing = [];
