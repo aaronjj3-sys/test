@@ -742,3 +742,91 @@ tbody tr:hover { background: var(--accent-soft); }
 .profile-extra { min-height: 214px; display: flex; flex-direction: column; }
 .profile-extra textarea { min-height: 96px; flex: 1; }
 .profile-extra .modal__actions { margin-top: auto; }
+
+/* ============ v5: filter bar, tour, tracker actions, send prefs ============ */
+
+/* dashboard filter bar */
+.filterbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem;
+  background: var(--card); border: 1.5px solid var(--border); border-radius: 16px;
+  box-shadow: var(--pop); padding: 0.6rem 0.8rem; margin-bottom: 1rem;
+}
+.fchip {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  background: var(--accent-soft); border: 1.5px solid var(--accent); border-radius: 999px;
+  padding: 0.22rem 0.4rem 0.22rem 0.7rem; font-size: 0.74rem; font-weight: 700; color: var(--accent-deep);
+}
+.fchip small { font-size: 0.62rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.7; }
+.fchip__x { background: none; border: none; color: var(--accent-deep); font-size: 0.95rem; line-height: 1; padding: 0 0.2rem; }
+.fchip__x:hover { color: #c2502e; }
+.filterbar__input { position: relative; flex: 1; min-width: 220px; }
+.filterbar__input input {
+  width: 100%; border: 1.5px dashed var(--line); border-radius: 999px; background: var(--bg);
+  padding: 0.4rem 0.9rem; font-size: 0.8rem; font-weight: 500; outline: none;
+}
+.filterbar__input input:focus { border-color: var(--accent); border-style: solid; }
+.filterbar__clear { background: none; border: none; font-size: 0.72rem; font-weight: 700; color: var(--ink-faint); }
+.filterbar__clear:hover { color: #c2502e; }
+.fsuggest {
+  position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 60;
+  background: var(--card); border: 2px solid var(--border); border-radius: 14px;
+  box-shadow: var(--pop-lg); overflow: hidden; max-height: 260px; overflow-y: auto;
+}
+.fsuggest__item {
+  display: flex; align-items: center; gap: 0.6rem; width: 100%; text-align: left;
+  padding: 0.5rem 0.85rem; background: none; border: none; font-size: 0.8rem; font-weight: 600; color: var(--ink);
+}
+.fsuggest__item small {
+  flex: none; width: 64px; font-size: 0.6rem; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--accent-deep);
+}
+.fsuggest__item:hover, .fsuggest__item.is-hot { background: var(--accent-soft); }
+
+/* tracker: centered, evenly distributed tabs + paused state */
+.funnel-tabs { display: flex; gap: 0.7rem; margin-bottom: 0.9rem; justify-content: center; }
+.ftab { flex: 1; max-width: 190px; align-items: center; text-align: center; }
+.funnel-bar {
+  display: flex; gap: 3px; height: 12px; border-radius: 99px; overflow: hidden;
+  border: 1.5px solid var(--border); background: var(--panel); margin-bottom: 1.3rem;
+}
+.funnel-bar i { display: block; }
+.fb--queued { background: #c4ccd4; }
+.fb--sent { background: #ecc94f; }
+.fb--opened { background: #9c8fd9; }
+.fb--replied { background: #4f9e78; }
+.fb--meeting { background: var(--accent); }
+.st--paused i { background: #d9a514; }
+td.cell-msgact { white-space: nowrap; text-align: right; }
+td.cell-msgact .btn + .btn { margin-left: 0.4rem; }
+
+/* settings cards: equal heights so all four nodes align */
+.settings-grid { align-items: stretch; }
+.settings-grid .pcard { display: flex; flex-direction: column; }
+.settings-grid .pcard .setrow:last-child { margin-top: auto; }
+
+/* guided tour */
+#tour { position: fixed; inset: 0; z-index: 300; }
+.tour-hole {
+  position: absolute; border-radius: 18px; border: 2.5px solid var(--accent);
+  box-shadow: 0 0 0 9999px rgba(22, 34, 46, 0.55);
+  transition: all 0.3s ease; pointer-events: none;
+}
+.tour-card {
+  position: absolute; width: min(340px, 86vw);
+  background: var(--card); border: 2px solid var(--border); border-radius: 18px;
+  box-shadow: 6px 6px 0 var(--border); padding: 1.1rem 1.2rem;
+  animation: pop 0.25s ease;
+}
+.tour-card small { font: 700 0.64rem var(--mono); text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-faint); }
+.tour-card h3 { font-size: 1.05rem; margin: 0.25rem 0 0.3rem; }
+.tour-card p { font-size: 0.82rem; color: var(--ink-soft); font-weight: 500; line-height: 1.5; }
+.tour-card__actions { display: flex; gap: 0.5rem; margin-top: 0.9rem; }
+.tour-card__actions .btn:last-child { margin-left: auto; }
+
+/* onboarding step 5 extras */
+.ob-hint { font-size: 0.76rem; color: var(--ink-faint); font-weight: 500; margin: -0.2rem 0 0.5rem; }
+.ob-sample-add { display: flex; justify-content: flex-end; margin-top: 0.5rem; }
+#ob-sample-text { margin-top: 0.6rem; }
+
+/* send prefs modal */
+.sp-mode .pill b { font-weight: 800; }

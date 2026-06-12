@@ -53,12 +53,31 @@ The app automatically switches from dev mode to a real login gate once
 
 Scopes stay at openid/email/profile — login only. **No Gmail scopes here.**
 
-## 4. LinkedIn login (optional, not currently in the UI)
+## 4. LinkedIn connection — ~15 minutes
 
-The login overlay offers Google and magic links. If you want LinkedIn later:
-developer.linkedin.com → create app → request "Sign In with LinkedIn using
-OpenID Connect" → add the Supabase callback URL → enable the LinkedIn (OIDC)
-provider in Supabase, then add the button back in `app/auth.js`.
+The app's Connections card has a working LinkedIn connect flow (identity via
+OpenID Connect; stored in oauth_connections like Google). To turn it on:
+
+1. https://developer.linkedin.com → Create app (needs a LinkedIn company page).
+2. Products tab → request **"Sign In with LinkedIn using OpenID Connect"**.
+3. Auth tab → add redirect URL:
+   - local: `http://localhost:8000/api/linkedin/callback`
+   - prod:  `https://YOUR-DOMAIN/api/linkedin/callback`
+4. Copy Client ID + Client Secret into `.env.local` (and Vercel env):
+   `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`.
+
+That's it; the Connect button in Settings starts working. Note: LinkedIn does
+not offer a public messaging API, so this connects identity (name, email,
+member id) for personalization; DMs would go through their Partner program.
+
+## 4b. Claude-powered parsing (optional) — 2 minutes
+
+Set `ANTHROPIC_API_KEY` in `.env.local` / Vercel and two things upgrade
+automatically (both have deterministic fallbacks without it):
+- Resume parsing: school/degree/experience/skills extracted by
+  `claude-haiku-4-5` with typo correction, instead of regex heuristics.
+- Writing-style learning: your writing samples are analyzed into a style
+  profile that shapes every draft.
 
 ## 5. Email magic links — 0 minutes (then 30 for production)
 

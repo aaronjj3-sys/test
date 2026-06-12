@@ -38,9 +38,10 @@ const state = {
   autonomy: load("knock_autonomy", { review: true, followups: true, weekends: false, digest: true }),
   knocks: load("knock_left", 15),
   searchMode: load("knock_search_mode", "founders"),
+  searchFilters: load("knock_filters", { keywords: [], industries: [], locations: [], companies: [] }),
+  sendPrefs: load("knock_send_prefs", null),
   doorsPage: 0,
   selectedDoors: new Set(),
-  filters: { q: "" },
   trackerTab: "all",
   sourcing: false,
 };
@@ -110,37 +111,78 @@ function saveConnections() {
   save("knock_connections", state.connections);
 }
 
-function connectGoogle() {
+/* Starts an OAuth connect flow and returns the user to the view they were
+   on (inbox, dashboard, settings...) when the provider redirects back. */
+function connectProvider(provider) {
   const user = window.knockAuth?.user || {};
   if ((window.knockAuth?.mode || "dev") !== "supabase" || !user.id || user.id === "dev") {
-    toast("Connect Google requires Supabase login. Configure Supabase, log in, then try again");
+    toast(`Connect ${provider === "google" ? "Google" : "LinkedIn"} requires Supabase login. Configure Supabase, log in, then try again`);
     return;
   }
-
   const params = new URLSearchParams({
     user_id: user.id,
     user_email: user.email || "",
-    return_to: `${location.pathname || "/app/index.html"}#settings`,
+    return_to: `${location.pathname || "/app/index.html"}${location.hash || "#dashboard"}`,
   });
-  location.href = `/api/google/connect?${params.toString()}`;
+  location.href = `/api/${provider}/connect?${params.toString()}`;
+}
+const connectGoogle = () => connectProvider("google");
+const connectLinkedIn = () => connectProvider("linkedin");
+
+function handleConnectReturn() {
+  const url = new URL(location.href);
+  let touched = false;
+  for (const provider of ["google", "linkedin"]) {
+    const connected = url.searchParams.get(provider) === "connected";
+    const error = url.searchParams.get(`${provider}_error`);
+    if (connected) {
+      state.connections[provider] = true;
+      saveConnections();
+      toast(`${provider === "google" ? "Google" : "LinkedIn"} connected`);
+    } else if (error) {
+      toast(`${provider === "google" ? "Google" : "LinkedIn"} connect failed: ${esc(error)}`);
+    }
+    touched = touched || connected || Boolean(error);
+  }
+  if (touched) {
+    history.replaceState(null, "", `${location.pathname}${location.hash || "#dashboard"}`);
+  }
 }
 
-function handleGoogleReturn() {
-  const url = new URL(location.href);
-  const connected = url.searchParams.get("google") === "connected";
-  const error = url.searchParams.get("google_error");
+/* Server is the source of truth for connections: sync on boot so the UI
+   shows what's actually connected, on every page and every device. */
+async function syncConnections() {
+  const user = window.knockAuth?.user;
+  if (!user?.id || user.id === "dev") return;
+  try {
+    const res = await fetch(`/api/connections/status?user_id=${encodeURIComponent(user.id)}`);
+    const data = await res.json();
+    if (!data.persisted) return;
+    let changed = false;
+    for (const provider of ["google", "linkedin", "outlook"]) {
+      const isConnected = Boolean(data.connections[provider]?.connected);
+      if (state.connections[provider] !== isConnected) {
+        state.connections[provider] = isConnected;
+        changed = true;
+      }
+    }
+    if (changed) { saveConnections(); navigate(); }
+  } catch { /* offline or dev server without Supabase; keep local state */ }
+}
 
-  if (connected) {
-    state.connections.google = true;
-    saveConnections();
-    toast("Google connected");
-  } else if (error) {
-    toast(`Google connect failed: ${esc(error)}`);
-  }
-
-  if (connected || error) {
-    history.replaceState(null, "", `${location.pathname}${location.hash || "#settings"}`);
-  }
+async function disconnectProvider(provider) {
+  const user = window.knockAuth?.user || {};
+  state.connections[provider] = false;
+  saveConnections();
+  try {
+    await fetch("/api/connections/disconnect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: user.id, provider }),
+    });
+  } catch { /* local state already cleared */ }
+  toast(`${provider === "google" ? "Google" : provider === "linkedin" ? "LinkedIn" : "Outlook"} disconnected`);
+  navigate();
 }
 
 /* ---------------- streak (real, based on days you actually showed up) ---------------- */
@@ -169,7 +211,8 @@ function updateChrome() {
 /* ============================================================
    ROUTER
    ============================================================ */
-const routes = { dashboard: renderDashboard, people: renderPeople, inbox: renderInbox, tracker: renderTracker, profile: renderProfile, settings: renderSettings };
+/* "people" stays as a route alias: Find People merged into the dashboard */
+const routes = { dashboard: renderDashboard, people: renderDashboard, inbox: renderInbox, tracker: renderTracker, profile: renderProfile, settings: renderSettings };
 
 function navigate() {
   const route = location.hash.replace("#", "") || "dashboard";
@@ -259,7 +302,7 @@ async function runSourcing() {
     const res = await fetch("/api/sourcing/apollo", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ profile: state.profile, searchMode: state.searchMode, limit: 100 }),
+      body: JSON.stringify({ profile: state.profile, searchMode: state.searchMode, filters: state.searchFilters, limit: 100 }),
     });
     const data = await res.json();
     clearInterval(ticker);
@@ -316,6 +359,117 @@ function pager(total, page, idPrefix) {
   </div>`;
 }
 
+/* ---- search filters: what Apollo lets us slice on, right from the dashboard ---- */
+const FILTER_KINDS = {
+  industry: { label: "Industry", bucket: "industries" },
+  location: { label: "Location", bucket: "locations" },
+  company: { label: "Company", bucket: "companies" },
+  keyword: { label: "Keyword", bucket: "keywords" },
+};
+const SUGGEST_LOCATIONS = ["San Francisco", "New York", "Los Angeles", "Boston", "Chicago", "Austin", "Seattle", "Denver", "Miami", "Washington DC", "Remote", "London", "Toronto"];
+
+const saveFilters = () => save("knock_filters", state.searchFilters);
+const activeFilterChips = () =>
+  Object.entries(FILTER_KINDS).flatMap(([kind, cfg]) =>
+    (state.searchFilters[cfg.bucket] || []).map((v) => ({ kind, label: cfg.label, value: v })));
+
+function addFilter(kind, value) {
+  const bucket = FILTER_KINDS[kind].bucket;
+  const v = value.trim();
+  if (!v) return false;
+  state.searchFilters[bucket] = state.searchFilters[bucket] || [];
+  if (state.searchFilters[bucket].some((x) => x.toLowerCase() === v.toLowerCase())) return false;
+  state.searchFilters[bucket].push(v);
+  saveFilters();
+  return true;
+}
+
+function removeFilter(kind, value) {
+  const bucket = FILTER_KINDS[kind].bucket;
+  state.searchFilters[bucket] = (state.searchFilters[bucket] || []).filter((x) => x !== value);
+  saveFilters();
+}
+
+function filterSuggestions(q) {
+  const needle = q.trim().toLowerCase();
+  if (!needle) return [];
+  const out = [];
+  for (const opt of OB_PATHS) {
+    if (opt.toLowerCase().includes(needle)) out.push({ kind: "industry", value: opt });
+    if (out.length >= 4) break;
+  }
+  for (const opt of SUGGEST_LOCATIONS) {
+    if (opt.toLowerCase().includes(needle)) out.push({ kind: "location", value: opt });
+    if (out.length >= 7) break;
+  }
+  out.push({ kind: "company", value: q.trim() });
+  out.push({ kind: "keyword", value: q.trim() });
+  return out.slice(0, 9);
+}
+
+function filterBar() {
+  const chips = activeFilterChips();
+  return `<div class="filterbar" id="filterbar">
+    ${chips.map((c) => `
+      <span class="fchip" data-kind="${c.kind}" data-value="${esc(c.value)}">
+        <small>${c.label}</small>${esc(c.value)}<button class="fchip__x" title="Remove">&times;</button>
+      </span>`).join("")}
+    <div class="filterbar__input">
+      <input id="filter-input" type="text" placeholder="${chips.length ? "Add another filter…" : "Filter by industry, location, company…"}" autocomplete="off">
+      <div class="fsuggest" id="fsuggest" hidden></div>
+    </div>
+    <button class="btn btn--accent btn--sm" id="filter-apply">Search</button>
+    ${chips.length ? `<button class="filterbar__clear" id="filter-clear">Clear all</button>` : ""}
+  </div>`;
+}
+
+function wireFilterBar() {
+  const bar = $("#filterbar", view);
+  if (!bar) return;
+  const input = $("#filter-input", bar);
+  const sug = $("#fsuggest", bar);
+
+  const applySearch = () => { location.hash = "dashboard"; runSourcing(); };
+
+  const renderSuggestions = () => {
+    const items = filterSuggestions(input.value);
+    sug.hidden = items.length === 0;
+    sug.innerHTML = items.map((s, i) => `
+      <button class="fsuggest__item ${i === 0 ? "is-hot" : ""}" data-kind="${s.kind}" data-value="${esc(s.value)}">
+        <small>${FILTER_KINDS[s.kind].label}</small>${esc(s.value)}
+      </button>`).join("");
+    $$(".fsuggest__item", sug).forEach((b) => b.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      if (addFilter(b.dataset.kind, b.dataset.value)) applySearch();
+    }));
+  };
+
+  input.addEventListener("input", renderSuggestions);
+  input.addEventListener("focus", renderSuggestions);
+  input.addEventListener("blur", () => setTimeout(() => { sug.hidden = true; }, 150));
+  input.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const first = $(".fsuggest__item.is-hot", sug);
+    const kind = first && !sug.hidden ? first.dataset.kind : "keyword";
+    const value = first && !sug.hidden ? first.dataset.value : input.value;
+    if (addFilter(kind, value)) applySearch();
+  });
+  $("#filter-apply", bar).addEventListener("click", () => {
+    if (input.value.trim()) addFilter("keyword", input.value);
+    applySearch();
+  });
+  $("#filter-clear", bar)?.addEventListener("click", () => {
+    state.searchFilters = { keywords: [], industries: [], locations: [], companies: [] };
+    saveFilters();
+    applySearch();
+  });
+  $$(".fchip__x", bar).forEach((x) => x.addEventListener("click", (e) => {
+    const chip = e.target.closest(".fchip");
+    removeFilter(chip.dataset.kind, chip.dataset.value);
+    applySearch();
+  }));
+}
+
 function renderDoorsQueue() {
   const doors = state.doors;
   const meta = state.doorsMeta || {};
@@ -345,9 +499,13 @@ function renderDoorsQueue() {
       <div>${I.plane}</div>
       <div>
         <b>Campaign queued · ${campaign.selectedDoorIds.length} knock${campaign.selectedDoorIds.length === 1 ? "" : "s"}</b>
-        <p>Connect Gmail and Calendar to send emails, detect replies, and schedule meetings.</p>
+        <p>${googleConnected()
+          ? "Google is connected. Sending engine wiring is the next build step; manage the queue in the tracker."
+          : "Connect Gmail and Calendar to send emails, detect replies, and schedule meetings."}</p>
       </div>
-      <button class="btn btn--paper btn--sm" id="q-google">Connect Google</button>
+      ${googleConnected()
+        ? `<a class="btn btn--paper btn--sm" href="#tracker">Open tracker</a>`
+        : `<button class="btn btn--paper btn--sm" id="q-google">Connect Google</button>`}
     </div>` : ""}
 
     <div class="rowhead">
@@ -356,10 +514,10 @@ function renderDoorsQueue() {
       <div class="rowhead__actions">
         ${SEARCH_MODES_UI.map(([id, label]) =>
           `<button class="pill ${state.searchMode === id ? "is-on" : ""}" data-mode="${id}">${label}</button>`).join("")}
-        <button class="btn btn--paper btn--sm" id="resource">Run new search</button>
         <button class="btn btn--sm" id="launch" disabled>Approve &amp; launch</button>
       </div>
     </div>
+    ${filterBar()}
     <div class="tablewrap"><table class="doors-table">
       <thead><tr><th><input type="checkbox" id="check-page" title="Select everyone on this page"></th><th>Person</th><th>Company</th><th>Match</th><th>Why</th><th>Draft</th><th></th></tr></thead>
       <tbody>${slice.map((d) => doorRow(d, queuedIds)).join("")}</tbody>
@@ -369,13 +527,13 @@ function renderDoorsQueue() {
   </div>`;
 
   wireDoorsTable(slice, queuedIds);
+  wireFilterBar();
 
   $$(".rowhead .pill", view).forEach((p) => p.addEventListener("click", () => {
     state.searchMode = p.dataset.mode;
     save("knock_search_mode", state.searchMode);
     runSourcing();
   }));
-  $("#resource", view).addEventListener("click", runSourcing);
   $("#q-google", view)?.addEventListener("click", connectGoogle);
   $("#doors-pager", view)?.addEventListener("click", (e) => {
     const b = e.target.closest("[data-p]");
@@ -436,6 +594,54 @@ function openDoorDraft(d) {
   });
 }
 
+/* ---- sending preferences: asked once, on the first launch ---- */
+function openSendPrefs(onDone) {
+  const prefs = state.sendPrefs || { mode: "review", channel: "gmail", attachResume: false };
+  const channelRow = (id, name, hint, available) => `
+    <button type="button" class="pill sp-channel ${prefs.channel === id ? "is-on" : ""}" data-v="${id}" ${available ? "" : 'data-off="1"'}>
+      ${name}${available ? "" : " · not connected"}
+    </button>`;
+  openModal(`
+    <h2>How should Knock send for you?</h2>
+    <p class="sub">Set it once; change it anytime in Settings.</p>
+    <label>Sending mode</label>
+    <div class="chips-select chips-select--stack sp-mode">
+      <button type="button" class="pill ${prefs.mode === "review" ? "is-on" : ""}" data-v="review"><b>Review every send</b> · you approve, edit, and add attachments before anything goes out</button>
+      <button type="button" class="pill ${prefs.mode === "auto" ? "is-on" : ""}" data-v="auto"><b>Fully automated</b> · Scout sends and follows up on its own, at their reading hours</button>
+    </div>
+    <label>Channel</label>
+    <div class="chips-select sp-chan">
+      ${channelRow("gmail", "Gmail", "", googleConnected())}
+      ${channelRow("linkedin", "LinkedIn", "", Boolean(state.connections.linkedin))}
+      ${channelRow("queue", "Hold in queue", "", true)}
+    </div>
+    ${googleConnected() ? "" : `<p class="connlist__fine">Gmail isn't connected yet. Knocks stay safely queued until you connect it in Settings.</p>`}
+    <label>Attachments</label>
+    <div class="setrow" style="border:none;padding:.3rem 0">
+      <div><strong>Attach my resume</strong><small>Adds your resume to every first knock</small></div>
+      <label class="switch end"><input type="checkbox" id="sp-resume" ${prefs.attachResume ? "checked" : ""}><i></i></label>
+    </div>
+    <div class="modal__actions">
+      <button class="btn btn--accent" id="sp-save">Save &amp; continue</button>
+    </div>`);
+  wireChips("sp-mode", { single: true });
+  $$(".sp-chan .pill", modal).forEach((p) => p.addEventListener("click", () => {
+    if (p.dataset.off) { toast(`${p.dataset.v === "gmail" ? "Gmail" : "LinkedIn"} isn't connected yet. Connect it in Settings first`); return; }
+    $$(".sp-chan .pill", modal).forEach((x) => x.classList.toggle("is-on", x === p));
+  }));
+  $("#sp-save").addEventListener("click", () => {
+    state.sendPrefs = {
+      mode: $(".sp-mode .pill.is-on", modal)?.dataset.v || "review",
+      channel: $(".sp-chan .pill.is-on", modal)?.dataset.v || "queue",
+      attachResume: $("#sp-resume").checked,
+    };
+    save("knock_send_prefs", state.sendPrefs);
+    closeModal();
+    toast("Sending preferences saved");
+    onDone && onDone();
+  });
+}
+
 async function launchCampaign() {
   const selected = (state.doors || []).filter((d) => state.selectedDoors.has(d.id));
   if (!selected.length) return;
@@ -443,6 +649,8 @@ async function launchCampaign() {
     toast(`You have ${state.knocks} knock${state.knocks === 1 ? "" : "s"} left this month. Deselect a few or upgrade.`);
     return;
   }
+  /* first send: let them choose automation level, channel, attachments */
+  if (!state.sendPrefs) return openSendPrefs(launchCampaign);
   try {
     const res = await fetch("/api/campaigns/create", {
       method: "POST",
@@ -464,53 +672,6 @@ async function launchCampaign() {
   } catch (err) {
     toast(`Launch failed: ${esc(err.message)}`);
   }
-}
-
-/* ============================================================
-   FIND PEOPLE: the full sourced list, searchable
-   ============================================================ */
-function renderPeople() {
-  if (!state.profile) return renderNeedsProfile();
-  const doors = state.doors || [];
-  const q = state.filters.q;
-  const list = q
-    ? doors.filter((d) => `${d.name} ${d.companyName || ""} ${d.title || ""}`.toLowerCase().includes(q))
-    : doors;
-  const queuedIds = new Set(state.campaigns.flatMap((c) => c.selectedDoorIds));
-
-  view.innerHTML = `<div class="viewwrap">
-    <div class="vh">
-      <h1>Find people, <em>not postings.</em></h1>
-      <p>Everyone Scout pulled in your last sourcing pass, ranked by who will actually answer you.</p>
-    </div>
-    <div class="filters">
-      ${SEARCH_MODES_UI.map(([id, label]) =>
-        `<button class="pill ${state.searchMode === id ? "is-on" : ""}" data-mode="${id}">${label}</button>`).join("")}
-      <button class="btn btn--paper btn--sm" id="people-search">Run new search</button>
-    </div>
-    ${list.length ? `
-    <div class="tablewrap"><table class="doors-table">
-      <thead><tr><th></th><th>Person</th><th>Company</th><th>Match</th><th>Why</th><th>Draft</th><th></th></tr></thead>
-      <tbody>${list.slice(0, 50).map((d) => doorRow(d, queuedIds)).join("")}</tbody>
-    </table></div>
-    ${list.length > 50 ? `<p class="meta-warn">Showing the top 50 of ${list.length}. Use search to narrow down.</p>` : ""}`
-    : `<div class="ghost">
-        <div class="ghost__icon">${I.search}</div>
-        <h2>${q ? "No one matches that search" : "No doors sourced yet"}</h2>
-        <p>${q ? "Try a different name, company, or title." : "Run a sourcing pass and Scout will fill this view."}</p>
-        ${q ? "" : `<button class="btn btn--accent" id="people-source">Find doors</button>`}
-      </div>`}
-  </div>`;
-
-  $$(".filters .pill", view).forEach((p) => p.addEventListener("click", () => {
-    state.searchMode = p.dataset.mode;
-    save("knock_search_mode", state.searchMode);
-    location.hash = "dashboard";
-    runSourcing();
-  }));
-  $("#people-search", view)?.addEventListener("click", () => { location.hash = "dashboard"; runSourcing(); });
-  $("#people-source", view)?.addEventListener("click", () => { location.hash = "dashboard"; runSourcing(); });
-  wireDoorsTable(list.slice(0, 50), queuedIds);
 }
 
 /* ============================================================
@@ -536,7 +697,7 @@ function openConnections() {
             : `<button class="btn btn--sm end act-connect">${c.id === "google" ? "Connect Google" : "Connect"}</button>`}
         </div>`).join("")}
     </div>
-    <p class="connlist__fine">Google connects Gmail and Calendar. LinkedIn is next.</p>
+    <p class="connlist__fine">Google connects Gmail and Calendar. LinkedIn connects your identity for DMs and connection notes.</p>
     <div class="modal__actions"><button class="btn btn--ghost" id="m-close">Done</button></div>`);
   const setConn = (id, val) => {
     state.connections[id] = val;
@@ -548,11 +709,16 @@ function openConnections() {
     b.addEventListener("click", (e) => {
       const id = e.target.closest(".connrow").dataset.id;
       if (id === "google") return connectGoogle();
-      if (id === "linkedin") return toast("LinkedIn connect is next. This channel is ready for the next build");
+      if (id === "linkedin") return connectLinkedIn();
       setConn(id, true);
     }));
   $$(".act-disconnect", modal).forEach((b) =>
-    b.addEventListener("click", (e) => setConn(e.target.closest(".connrow").dataset.id, false)));
+    b.addEventListener("click", (e) => {
+      const id = e.target.closest(".connrow").dataset.id;
+      closeModal();
+      if (id === "google" || id === "linkedin") return disconnectProvider(id);
+      setConn(id, false);
+    }));
   $("#m-close", modal).addEventListener("click", closeModal);
 }
 
@@ -569,14 +735,17 @@ function renderInbox() {
       <div class="ghost__icon">${I.mail}</div>
       <h2>No threads yet</h2>
       <p>${state.messages.length
-        ? `You have ${state.messages.length} knock${state.messages.length === 1 ? "" : "s"} queued. Connect Gmail and Calendar to send emails, detect replies, and schedule meetings.`
+        ? googleConnected()
+          ? `Google is connected and ${state.messages.length} knock${state.messages.length === 1 ? " is" : "s are"} queued. When replies come in, every thread shows up here, warmest first.`
+          : `You have ${state.messages.length} knock${state.messages.length === 1 ? "" : "s"} queued. Connect Gmail and Calendar to send emails, detect replies, and schedule meetings.`
         : "Launch your first campaign from the dashboard. When people reply, every thread shows up here, warmest first."}</p>
-      <button class="btn btn--accent" id="inbox-cta">${state.messages.length ? "Connect Google" : "Go to dashboard"}</button>
+      <button class="btn btn--accent" id="inbox-cta">${state.messages.length && !googleConnected() ? "Connect Google" : state.messages.length ? "View the tracker" : "Go to dashboard"}</button>
     </div>
   </div>`;
   $("#connections-btn", view).addEventListener("click", openConnections);
   $("#inbox-cta", view).addEventListener("click", () => {
-    if (state.messages.length) connectGoogle();
+    if (state.messages.length && !googleConnected()) connectGoogle();
+    else if (state.messages.length) location.hash = "tracker";
     else location.hash = "dashboard";
   });
 }
@@ -592,11 +761,24 @@ const STAGES = [
   { id: "meeting", label: "Meeting booked", hint: "Go win" },
 ];
 
+function messageActions(m) {
+  if (m.status === "queued") return `
+    <button class="btn btn--paper btn--sm msg-pause" data-id="${m.id}">Pause</button>
+    <button class="btn btn--paper btn--sm msg-cancel" data-id="${m.id}">Cancel</button>`;
+  if (m.status === "paused") return `
+    <button class="btn btn--sm msg-resume" data-id="${m.id}">Resume</button>
+    <button class="btn btn--paper btn--sm msg-cancel" data-id="${m.id}">Cancel</button>`;
+  return "";
+}
+
 function renderTracker() {
   const tabs = [{ id: "all", label: "All" }, ...STAGES];
   const count = (id) => (id === "all" ? state.messages.length : state.messages.filter((m) => m.status === id).length);
   const active = state.trackerTab;
-  const rows = state.messages.filter((m) => active === "all" || m.status === active);
+  const rows = state.messages.filter((m) => active === "all" || m.status === active ||
+    (active === "queued" && m.status === "paused"));
+  const funnelCounts = STAGES.map((s) => ({ ...s, n: s.id === "queued" ? count("queued") + count("paused") : count(s.id) }));
+  const funnelTotal = funnelCounts.reduce((sum, s) => sum + s.n, 0);
 
   view.innerHTML = `<div class="viewwrap">
     <div class="vh"><h1>Every door, <em>one funnel.</em></h1>
@@ -605,24 +787,30 @@ function renderTracker() {
     <div class="funnel-tabs">
       ${tabs.map((s) => `
         <button class="ftab ${active === s.id ? "is-on" : ""}" data-id="${s.id}">
-          <b>${count(s.id)}</b><span>${s.label}</span>
+          <b>${s.id === "queued" ? count("queued") + count("paused") : count(s.id)}</b><span>${s.label}</span>
         </button>`).join("")}
     </div>
+
+    ${funnelTotal ? `
+    <div class="funnel-bar" title="Your pipeline at a glance">
+      ${funnelCounts.map((s) => s.n ? `<i class="fb--${s.id}" style="flex:${s.n}" title="${s.label}: ${s.n}"></i>` : "").join("")}
+    </div>` : ""}
 
     ${state.messages.length ? `
     <div class="tablewrap">
       <table>
-        <thead><tr><th>Person</th><th>Company</th><th>Subject</th><th>Status</th><th>Queued</th></tr></thead>
+        <thead><tr><th>Person</th><th>Company</th><th>Subject</th><th>Status</th><th>Queued</th><th></th></tr></thead>
         <tbody>
           ${rows.map((m) => `
             <tr>
               <td><div class="cell-who"><div><strong>${esc(m.name || "Unknown")}</strong><small>${esc(m.title || "")}</small></div></div></td>
               <td>${m.company ? `<div class="cell-co">${logo(m.company, m.companyDomain, 26)}<span>${esc(m.company)}</span></div>` : "·"}</td>
               <td class="cell-draft"><b>${esc(m.subject)}</b></td>
-              <td><span class="st st--${m.status === "queued" ? "drafted" : m.status}"><i></i>${m.status}</span></td>
+              <td><span class="st st--${m.status === "queued" || m.status === "paused" ? "drafted" : m.status}"><i></i>${m.status}</span></td>
               <td class="cell-mono">${new Date(m.createdAt).toLocaleDateString()}</td>
+              <td class="cell-msgact">${messageActions(m)}</td>
             </tr>`).join("")}
-          ${rows.length === 0 ? `<tr><td colspan="5"><div class="empty" style="height:110px">Nothing in this stage yet.</div></td></tr>` : ""}
+          ${rows.length === 0 ? `<tr><td colspan="6"><div class="empty" style="height:110px">Nothing in this stage yet.</div></td></tr>` : ""}
         </tbody>
       </table>
     </div>` : `
@@ -637,6 +825,29 @@ function renderTracker() {
   $$(".ftab", view).forEach((b) =>
     b.addEventListener("click", () => { state.trackerTab = b.dataset.id; renderTracker(); }));
   $("#tr-cta", view)?.addEventListener("click", () => { location.hash = "dashboard"; });
+  const findMsg = (id) => state.messages.find((m) => m.id === id);
+  $$(".msg-pause", view).forEach((b) => b.addEventListener("click", () => {
+    const m = findMsg(b.dataset.id);
+    if (m) { m.status = "paused"; saveLive(); toast("Paused. This knock won't send until you resume it"); renderTracker(); }
+  }));
+  $$(".msg-resume", view).forEach((b) => b.addEventListener("click", () => {
+    const m = findMsg(b.dataset.id);
+    if (m) { m.status = "queued"; saveLive(); toast("Back in the queue"); renderTracker(); }
+  }));
+  $$(".msg-cancel", view).forEach((b) => b.addEventListener("click", () => {
+    const m = findMsg(b.dataset.id);
+    if (!m) return;
+    state.messages = state.messages.filter((x) => x.id !== m.id);
+    for (const c of state.campaigns) {
+      c.selectedDoorIds = (c.selectedDoorIds || []).filter((id) => id !== m.doorId);
+    }
+    state.campaigns = state.campaigns.filter((c) => (c.selectedDoorIds || []).length > 0);
+    state.knocks = Math.min(15, state.knocks + 1);
+    saveLive();
+    toast("Canceled. That knock is back in your pocket");
+    renderTracker();
+    updateChrome();
+  }));
 }
 
 /* ============================================================
@@ -884,6 +1095,10 @@ function renderSettings() {
           <label class="switch end"><input type="checkbox" data-k="followups" ${state.autonomy.followups ? "checked" : ""}><i></i></label></div>
         <div class="setrow"><span class="ico">${I.cal}</span><div><strong>Weekend sends</strong><small>Off by default. Replies are 40% lower on weekends</small></div>
           <label class="switch end"><input type="checkbox" data-k="weekends" ${state.autonomy.weekends ? "checked" : ""}><i></i></label></div>
+        <div class="setrow"><span class="ico">${I.plane}</span><div><strong>Sending preferences</strong><small>${state.sendPrefs
+          ? `${state.sendPrefs.mode === "auto" ? "Fully automated" : "Review every send"} · via ${state.sendPrefs.channel === "gmail" ? "Gmail" : state.sendPrefs.channel === "linkedin" ? "LinkedIn" : "queue"}`
+          : "Mode, channel, and attachments for your knocks"}</small></div>
+          <button class="btn btn--paper btn--sm end" id="set-sendprefs">Edit</button></div>
       </div>
       <div class="pcard">
         <h3>Connections</h3>
@@ -916,6 +1131,7 @@ function renderSettings() {
       toast(sw.checked ? "On" : "Off");
     }));
   $("#set-upgrade", view).addEventListener("click", openUpgrade);
+  $("#set-sendprefs", view).addEventListener("click", () => openSendPrefs(renderSettings));
   $("#set-feedback", view).addEventListener("click", openFeedback);
   $("#set-connections", view).addEventListener("click", openConnections);
   $("#set-logout", view).addEventListener("click", () => window.knockAuth.signOut());
@@ -930,24 +1146,17 @@ function renderSettings() {
     $("#m-cancel").addEventListener("click", closeModal);
     $("#m-reset").addEventListener("click", () => {
       ["knock_profile", "knock_doors", "knock_doors_meta", "knock_campaigns", "knock_messages",
-       "knock_connections", "knock_autonomy", "knock_left", "knock_search_mode", "knock_ob_draft", "knock_days"]
+       "knock_connections", "knock_autonomy", "knock_left", "knock_search_mode", "knock_ob_draft", "knock_days",
+       "knock_filters", "knock_send_prefs", "knock_tour_done"]
         .forEach((k) => localStorage.removeItem(k));
       location.reload();
     });
   });
-  const setConn = (id, val) => {
-    state.connections[id] = val;
-    saveConnections();
-    const label = id === "google" ? "Google" : "LinkedIn";
-    toast(val ? `${label} connected` : `${label} disconnected`);
-    renderSettings();
-  };
   $$(".conn-on", view).forEach((b) => b.addEventListener("click", () => {
     if (b.dataset.id === "google") return connectGoogle();
-    if (b.dataset.id === "linkedin") return toast("LinkedIn connect is next. This channel is ready for the next build");
-    setConn(b.dataset.id, true);
+    if (b.dataset.id === "linkedin") return connectLinkedIn();
   }));
-  $$(".conn-off", view).forEach((b) => b.addEventListener("click", () => setConn(b.dataset.id, false)));
+  $$(".conn-off", view).forEach((b) => b.addEventListener("click", () => disconnectProvider(b.dataset.id)));
 
   fetch("/api/test-apollo").then((r) => r.json()).then((d) => {
     const el = $("#apollo-status", view);
@@ -1046,6 +1255,28 @@ const PEOPLE_TO_MODE = {
 
 const COMMON_SKILLS = ["Excel", "SQL", "Python", "JavaScript", "Tableau", "Power BI", "PowerPoint", "Airtable", "Figma", "PitchBook", "R", "Notion", "HubSpot", "Salesforce"];
 
+/* client-side fuzzy school match: prefer the resume's spelling when the
+   typed value is clearly the same school (typos, abbreviations) */
+function schoolSimilarity(a, b) {
+  const norm = (x) => (x || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+  const GENERIC = new Set(["university", "college", "school", "institute", "of", "the", "at", "state", "and"]);
+  const na = norm(a), nb = norm(b);
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  const toks = (x) => new Set(x.split(" ").filter((t) => t && !GENERIC.has(t)));
+  const ta = toks(na), tb = toks(nb);
+  const tok = ta.size && tb.size ? [...ta].filter((t) => tb.has(t)).length / Math.min(ta.size, tb.size) : 0;
+  const grams = (x) => { const g = new Set(); const y = x.split(" ").filter((t) => !GENERIC.has(t)).join(" "); for (let i = 0; i < y.length - 1; i++) g.add(y.slice(i, i + 2)); return g; };
+  const ga = grams(na), gb = grams(nb);
+  const gi = ga.size && gb.size ? [...ga].filter((g) => gb.has(g)).length / Math.min(ga.size, gb.size) : 0;
+  return Math.max(tok, gi);
+}
+const correctSchool = (typed, fromResume) => {
+  if (!fromResume) return typed || "";
+  if (!typed) return fromResume;
+  return schoolSimilarity(typed, fromResume) >= 0.45 ? fromResume : typed;
+};
+
 /* deterministic extraction; Claude parsing replaces this later */
 function extractProfileFacts(text) {
   const wins = [];
@@ -1058,6 +1289,41 @@ function extractProfileFacts(text) {
   const schoolMatch = text.match(/\b(UC\s?Irvine|UCI|UCLA|USC|Berkeley|Stanford|[A-Z][a-z]+ University)\b/);
   const skills = COMMON_SKILLS.filter((s) => new RegExp(`\\b${s.replace(/[+]/g, "\\+")}\\b`, "i").test(text));
   return { wins, school: schoolMatch ? schoolMatch[0].replace(/^UCI$/, "UC Irvine") : null, skills };
+}
+
+/* upload the resume to the parser; falls back to raw text + local extraction */
+async function parseResumeFile(file) {
+  try {
+    const buf = await file.arrayBuffer();
+    let bin = "";
+    const bytes = new Uint8Array(buf);
+    const CHUNK = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK) bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+    const res = await fetch("/api/profile/parse-resume", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fileName: file.name, contentBase64: btoa(bin) }),
+    });
+    const data = await res.json();
+    if (data.ok && data.parsed) {
+      OB.parsed = data.parsed;
+      OB.resumeParsed = true;
+      OB.parseNote = "";
+      const found = [data.parsed.school && "school", data.parsed.skills?.length && `${data.parsed.skills.length} skills`,
+        data.parsed.experience?.length && `${data.parsed.experience.length} roles`, data.parsed.quantifiedWins?.length && `${data.parsed.quantifiedWins.length} wins`]
+        .filter(Boolean).join(" · ");
+      toast(`Resume parsed${found ? ": " + found : ""}`);
+    } else {
+      OB.parsed = null;
+      OB.resumeParsed = false;
+      OB.parseNote = data.note || "Could not read this file.";
+    }
+  } catch {
+    OB.parsed = null;
+    OB.resumeParsed = false;
+    OB.parseNote = "Parsing is offline. Your file is saved; details can be filled in by hand.";
+  }
+  OB.resumeText = OB.parsed ? "" : await readFileText(file);
 }
 
 async function readFileText(file) {
@@ -1124,7 +1390,7 @@ function openOnboarding(step = 1) {
       <p class="sub">Scout pulls the wins that make people reply. Your resume never leaves your account.</p>
       <div class="dropzone dropzone--lg ${OB.resumeFileName ? "is-filled" : ""}" id="ob-zone">
         ${OB.resumeFileName
-          ? `${icon("doc")} ${esc(OB.resumeFileName)}<br><small>Click to swap it for another file</small>`
+          ? `${icon("doc")} ${esc(OB.resumeFileName)}${OB.resumeParsed ? " · parsed" : ""}<br><small>${OB.parseNote ? esc(OB.parseNote) + " " : ""}Click to swap it for another file</small>`
           : `${icon("doc")} Drag &amp; drop your resume<br><small>PDF, Word, or text · or click to browse</small>`}
       </div>
       <input type="file" id="ob-file" accept=".pdf,.doc,.docx,.txt,.md" hidden>
@@ -1136,7 +1402,10 @@ function openOnboarding(step = 1) {
       if (!f) return;
       OB.story = $("#ob-story", modal)?.value.trim() ?? OB.story;
       OB.resumeFileName = f.name;
-      OB.resumeText = await readFileText(f);
+      const zone = $("#ob-zone", modal);
+      zone.classList.add("is-filled");
+      zone.innerHTML = `${icon("doc")} ${esc(f.name)}<br><small>Scout is reading it…</small>`;
+      await parseResumeFile(f);
       saveOB();
       openOnboarding(1);
     });
@@ -1151,17 +1420,19 @@ function openOnboarding(step = 1) {
   /* ---------- 2 · about you ---------- */
   else if (step === 2) {
     const user = window.knockAuth?.user || {};
+    const parsed = OB.parsed || {};
+    const pre = (obVal, parsedVal) => obVal ?? parsedVal ?? "";
     openModal(`${obBars(2)}
       <h2>Tell Scout who's knocking.</h2>
-      <p class="sub">This is how you'll introduce yourself in every first line.</p>
-      <label>Full name</label><input type="text" id="ob-name" value="${esc(OB.fullName ?? (user.name && user.name !== user.email ? user.name : ""))}" placeholder="Jordan Rivers">
-      <label>School</label><input type="text" id="ob-school" value="${esc(OB.school || "")}" placeholder="UC Irvine, Paul Merage School of Business">
+      <p class="sub">${OB.parsed ? "Pulled from your resume; fix anything that's off." : "This is how you'll introduce yourself in every first line."}</p>
+      <label>Full name</label><input type="text" id="ob-name" value="${esc(OB.fullName ?? parsed.fullName ?? (user.name && user.name !== user.email ? user.name : ""))}" placeholder="Jordan Rivers">
+      <label>School</label><input type="text" id="ob-school" value="${esc(pre(OB.school, parsed.school))}" placeholder="UC Irvine, Paul Merage School of Business">
       <div class="ob-cols">
-        <div><label>Degree / major</label><input type="text" id="ob-degree" value="${esc(OB.degree || "")}" placeholder="B.A. Business Administration"></div>
-        <div><label>Class of</label><input type="text" id="ob-grad" value="${esc(OB.gradYear || "")}" placeholder="2027"></div>
+        <div><label>Degree / major</label><input type="text" id="ob-degree" value="${esc(pre(OB.degree, parsed.degree))}" placeholder="B.A. Business Administration"></div>
+        <div><label>Class of</label><input type="text" id="ob-grad" value="${esc(pre(OB.gradYear, parsed.gradYear))}" placeholder="2027"></div>
       </div>
       <div class="ob-cols">
-        <div><label>City</label><input type="text" id="ob-city" value="${esc(OB.location || "")}" placeholder="San Diego, CA"></div>
+        <div><label>City</label><input type="text" id="ob-city" value="${esc(pre(OB.location, parsed.location))}" placeholder="San Diego, CA"></div>
         <div><label>Where you work now (optional)</label><input type="text" id="ob-work" value="${esc(OB.currentRole || "")}" placeholder="Founder @ JCommerce"></div>
       </div>
       <div class="modal__actions">
@@ -1175,7 +1446,9 @@ function openOnboarding(step = 1) {
       if (!name) return obError("#ob-name", "Scout signs every draft with your name. Add it to keep going.");
       if (!school) return obError("#ob-school", "Your school is one of your strongest hooks. Add it to keep going.");
       OB.fullName = name;
-      OB.school = school;
+      const corrected = correctSchool(school, OB.parsed?.school);
+      if (corrected !== school) toast(`Matched to your resume: ${esc(corrected)}`);
+      OB.school = corrected;
       OB.degree = $("#ob-degree").value.trim();
       OB.gradYear = $("#ob-grad").value.trim();
       OB.location = $("#ob-city").value.trim();
@@ -1243,13 +1516,16 @@ function openOnboarding(step = 1) {
       <div class="chips-select chips-select--stack ob-line">${OB_LINES.map((t) => `<button type="button" class="pill ${OB.personaLine === t ? "is-on" : ""}" data-v="${esc(t)}">${esc(t)}</button>`).join("")}</div>
       <label>How do you work? (pick a few)</label>
       <div class="chips-select ob-style">${OB_STYLES.map((t) => `<button type="button" class="pill ${(OB.workStyles || []).includes(t) ? "is-on" : ""}" data-v="${esc(t)}">${esc(t)}</button>`).join("")}</div>
-      <label>Writing samples (optional, up to 10 files)</label>
+      <label>Writing samples (optional, up to 10)</label>
+      <p class="ob-hint">Drop files or paste an email, essay, or post you're proud of. Scout learns your rhythm from them.</p>
       <div class="dropzone ${(OB.writingSamples || []).length ? "is-filled" : ""}" id="ob-samples-zone">
         ${(OB.writingSamples || []).length
           ? `${icon("doc")} ${OB.writingSamples.length} sample${OB.writingSamples.length === 1 ? "" : "s"} added<br><small>${OB.writingSamples.map(esc).join(" · ")}</small>`
-          : `${icon("doc")} Drop emails or essays you're proud of<br><small>Scout learns your rhythm from them</small>`}
+          : `${icon("doc")} Drop writing samples here<br><small>.txt, .md, .eml read best</small>`}
       </div>
       <input type="file" id="ob-samples" multiple accept=".pdf,.doc,.docx,.txt,.md,.eml" hidden>
+      <textarea id="ob-sample-text" rows="3" placeholder="…or paste a sample here"></textarea>
+      <div class="ob-sample-add"><button type="button" class="btn btn--paper btn--sm" id="ob-sample-btn">+ Add pasted sample</button></div>
       <div class="modal__actions">
         <button class="btn btn--ghost" id="ob-back">← Back</button>
         <button class="btn btn--accent" id="ob-done">Build my profile →</button>
@@ -1257,33 +1533,53 @@ function openOnboarding(step = 1) {
     wireChips("ob-tone", { single: true });
     wireChips("ob-line", { single: true });
     wireChips("ob-style", {});
-    wireDrop("#ob-samples-zone", "#ob-samples", (files) => {
-      /* persist in-progress picks so the re-render doesn't lose them */
+    const persistStep5 = () => {
       OB.tone = readChips("ob-tone")[0] || OB.tone;
       OB.personaLine = readChips("ob-line")[0] || OB.personaLine;
       OB.workStyles = readChips("ob-style");
-      OB.writingSamples = [...(OB.writingSamples || []), ...files.map((f) => f.name)].slice(0, 10);
+    };
+    wireDrop("#ob-samples-zone", "#ob-samples", async (files) => {
+      persistStep5();
+      for (const f of files.slice(0, 10)) {
+        if ((OB.writingSamples || []).length >= 10) break;
+        OB.writingSamples = [...(OB.writingSamples || []), f.name];
+        const text = await readFileText(f);
+        if (text) OB.sampleTexts = [...(OB.sampleTexts || []), text.slice(0, 6000)];
+      }
+      OB.writingSamples = (OB.writingSamples || []).slice(0, 10);
       saveOB();
       openOnboarding(5);
     });
-    $("#ob-back").addEventListener("click", () => openOnboarding(4));
+    $("#ob-sample-btn").addEventListener("click", () => {
+      const text = $("#ob-sample-text", modal).value.trim();
+      if (!text) return obError("#ob-sample-text", "Paste some writing first, then add it.");
+      if ((OB.writingSamples || []).length >= 10) return obError("#ob-sample-text", "That's 10 samples, plenty for Scout to learn from.");
+      persistStep5();
+      OB.writingSamples = [...(OB.writingSamples || []), `pasted sample ${(OB.writingSamples || []).length + 1}`];
+      OB.sampleTexts = [...(OB.sampleTexts || []), text.slice(0, 6000)];
+      saveOB();
+      openOnboarding(5);
+    });
+    $("#ob-back").addEventListener("click", () => { persistStep5(); saveOB(); openOnboarding(4); });
     $("#ob-done").addEventListener("click", finishOnboarding);
   }
 }
 
-function finishOnboarding() {
+async function finishOnboarding() {
   OB.tone = readChips("ob-tone")[0] || "Sharp";
   OB.personaLine = readChips("ob-line")[0] || "";
   OB.workStyles = readChips("ob-style");
-  const facts = extractProfileFacts(`${OB.resumeText || ""} ${OB.story || ""}`);
+  const parsed = OB.parsed || {};
+  const local = extractProfileFacts(`${OB.resumeText || ""} ${OB.story || ""}`);
   const user = window.knockAuth?.user || {};
+  const wins = parsed.quantifiedWins?.length ? parsed.quantifiedWins : local.wins;
   state.profile = {
     fullName: OB.fullName,
     email: user.email || "",
-    school: OB.school || facts.school || "",
-    degree: OB.degree || "",
-    gradYear: OB.gradYear || "",
-    location: OB.location || "",
+    school: OB.school || parsed.school || local.school || "",
+    degree: OB.degree || parsed.degree || "",
+    gradYear: OB.gradYear || parsed.gradYear || "",
+    location: OB.location || parsed.location || "",
     currentRole: OB.currentRole || "",
     story: OB.story || "",
     resumeFileName: OB.resumeFileName || "",
@@ -1296,29 +1592,146 @@ function finishOnboarding() {
     signoff: `- ${(OB.fullName || "").split(" ")[0] || "Me"}`,
     traits: [...new Set([OB.personaLine, ...(OB.workStyles || [])].filter(Boolean))],
     writingSamples: OB.writingSamples || [],
-    quantifiedWins: facts.wins,
-    skills: facts.skills,
-    experience: [],
-    extraContext: "",
+    quantifiedWins: wins,
+    skills: [...new Set([...(parsed.skills || []), ...local.skills])].slice(0, 14),
+    experience: parsed.experience || [],
+    extraContext: parsed.extraContext || "",
+    styleProfile: null,
     goals: OB.industries || [],
     updatedAt: new Date().toISOString(),
   };
   save("knock_profile", state.profile);
   state.searchMode = PEOPLE_TO_MODE[(OB.targetRoles || [])[0]] || "founders";
   save("knock_search_mode", state.searchMode);
+
+  /* learn the writing voice from their samples (non-blocking for the UI) */
+  const sampleTexts = OB.sampleTexts || [];
   localStorage.removeItem("knock_ob_draft");
   closeModal();
   initAccount();
-  toast(`Profile built${facts.wins.length ? `, ${facts.wins.length} quantified win${facts.wins.length === 1 ? "" : "s"} extracted` : ""}. Scout is finding your first doors`);
+  toast(`Profile built${wins.length ? `, ${wins.length} quantified win${wins.length === 1 ? "" : "s"} extracted` : ""}. Scout is finding your first doors`);
   location.hash = "dashboard";
   navigate();
+  offerTour();
+
+  if (sampleTexts.length || state.profile.story) {
+    try {
+      const res = await fetch("/api/profile/analyze-style", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ samples: sampleTexts, story: state.profile.story }),
+      });
+      const data = await res.json();
+      if (data.ok && data.styleProfile) {
+        state.profile.styleProfile = data.styleProfile;
+        saveProfile();
+        if (sampleTexts.length) toast("Scout learned your writing voice from your samples");
+      }
+    } catch { /* style learning is a bonus, never a blocker */ }
+  }
 }
 
-/* ---------------- global search ---------------- */
+/* ============================================================
+   GUIDED TOUR: spotlight walkthrough of the whole app
+   ============================================================ */
+const TOUR_STEPS = [
+  { route: "dashboard", sel: ".statgrid", title: "Your command station", text: "Live counts: doors found, average match, knocks queued, and knocks left this month. Scout sources automatically; no buttons to press." },
+  { route: "dashboard", sel: "#filterbar", title: "Slice the search", text: "Filter by industry, location, company, or any keyword. Pick a suggestion or type your own, then hit Search and Scout pulls a fresh 100 people." },
+  { route: "dashboard", sel: ".doors-table", title: "Your launch queue", text: "25 people per page, scored against your profile. Tick the ones you want, hit Review knock to read and edit the draft, then Approve & launch." },
+  { route: "inbox", sel: ".ghost, .inbox", title: "Inbox", text: "Replies land here once Google is connected, warmest threads first. The Connections button manages every channel." },
+  { route: "tracker", sel: ".funnel-tabs", title: "Tracker", text: "Every knock moves through queued, sent, opened, replied, and meeting booked. Pause, resume, or cancel queued knocks right from the table." },
+  { route: "profile", sel: ".profile-grid", title: "Your profile", text: "Everything Scout knows about you, parsed from your resume. Every field is editable, and every edit updates future drafts instantly." },
+  { route: "settings", sel: ".settings-grid", title: "Settings", text: "Connections (Google, LinkedIn), agent autonomy, sending preferences, and your plan all live here." },
+];
+
+function waitForEl(sel, timeout = 6000) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    (function poll() {
+      const el = $(sel, view);
+      if (el) return resolve(el);
+      if (Date.now() - t0 > timeout) return resolve(null);
+      setTimeout(poll, 250);
+    })();
+  });
+}
+
+async function startTour(stepIndex = 0) {
+  document.getElementById("tour")?.remove();
+  if (stepIndex >= TOUR_STEPS.length) {
+    save("knock_tour_done", true);
+    location.hash = "dashboard";
+    toast("That's the tour. Go knock on something");
+    return;
+  }
+  const step = TOUR_STEPS[stepIndex];
+  if ((location.hash.replace("#", "") || "dashboard") !== step.route) {
+    location.hash = step.route;
+  }
+  const el = await waitForEl(step.sel);
+  if (!el) return startTour(stepIndex + 1);
+  el.scrollIntoView({ block: "center", behavior: "instant" });
+
+  const r = el.getBoundingClientRect();
+  const pad = 8;
+  const tour = document.createElement("div");
+  tour.id = "tour";
+  const cardBelow = r.bottom + 190 < window.innerHeight;
+  tour.innerHTML = `
+    <div class="tour-hole" style="left:${r.left - pad}px;top:${r.top - pad}px;width:${r.width + pad * 2}px;height:${r.height + pad * 2}px"></div>
+    <div class="tour-card" style="${cardBelow ? `top:${r.bottom + 16}px` : `bottom:${window.innerHeight - r.top + 16}px`};left:${Math.max(16, Math.min(r.left, window.innerWidth - 360))}px">
+      <small>${stepIndex + 1} of ${TOUR_STEPS.length}</small>
+      <h3>${step.title}</h3>
+      <p>${step.text}</p>
+      <div class="tour-card__actions">
+        <button class="btn btn--ghost btn--sm" id="tour-skip">Skip tour</button>
+        ${stepIndex > 0 ? '<button class="btn btn--paper btn--sm" id="tour-back">Back</button>' : ""}
+        <button class="btn btn--accent btn--sm" id="tour-next">${stepIndex === TOUR_STEPS.length - 1 ? "Done" : "Next"}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(tour);
+  $("#tour-next").addEventListener("click", () => startTour(stepIndex + 1));
+  $("#tour-back")?.addEventListener("click", () => startTour(stepIndex - 1));
+  $("#tour-skip").addEventListener("click", () => {
+    tour.remove();
+    save("knock_tour_done", true);
+    toast("You can replay the tour anytime from the account menu");
+  });
+}
+
+function offerTour() {
+  if (load("knock_tour_done", false)) return;
+  setTimeout(() => {
+    openModal(`
+      <h2>Want a quick tour?</h2>
+      <p class="sub">60 seconds, six stops. See how sourcing, the queue, the tracker, and your profile fit together.</p>
+      <div class="modal__actions">
+        <button class="btn btn--ghost" id="tour-no">I'll explore</button>
+        <button class="btn btn--accent" id="tour-yes">Show me around</button>
+      </div>`);
+    $("#tour-no").addEventListener("click", () => { closeModal(); save("knock_tour_done", true); });
+    $("#tour-yes").addEventListener("click", () => { closeModal(); startTour(0); });
+  }, 600);
+}
+
+/* ---------------- global search: quick-filter + Enter to search Apollo ---------------- */
 $("#global-search").addEventListener("input", (e) => {
-  state.filters.q = e.target.value.toLowerCase();
-  if (location.hash !== "#people") location.hash = "people";
-  else renderPeople();
+  const q = e.target.value.toLowerCase();
+  /* live-filter whatever table is on screen */
+  $$(".doors-table tbody tr, .view table tbody tr", view).forEach((tr) => {
+    tr.style.display = !q || tr.textContent.toLowerCase().includes(q) ? "" : "none";
+  });
+});
+$("#global-search").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  const q = e.target.value.trim();
+  if (!q) return;
+  e.target.value = "";
+  if (addFilter("keyword", q)) {
+    toast(`Searching with keyword "${esc(q)}"`);
+    location.hash = "dashboard";
+    runSourcing();
+  }
 });
 
 /* ---------------- account menu ---------------- */
@@ -1342,6 +1755,7 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest("#acct")) $("#acct-menu").hidden = true;
 });
 $("#acct-logout").addEventListener("click", () => window.knockAuth.signOut());
+$("#acct-tour")?.addEventListener("click", () => { $("#acct-menu").hidden = true; startTour(0); });
 
 /* ---------------- boot (auth-gated) ---------------- */
 (async function boot() {
@@ -1354,8 +1768,9 @@ $("#acct-logout").addEventListener("click", () => window.knockAuth.signOut());
   if (/access_token|refresh_token|error_description/.test(location.hash)) {
     history.replaceState(null, "", location.pathname + "#dashboard");
   }
-  handleGoogleReturn();
+  handleConnectReturn();
   initAccount();
   navigate();
+  syncConnections();
   if (!state.profile) openOnboarding(1);
 })();

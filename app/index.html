@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,400..900;1,400..900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="app.css?v=20260611-google-connect" />
+  <link rel="stylesheet" href="app.css?v=20260612-filters-tour" />
 </head>
 <body>
 
@@ -22,10 +22,6 @@
         <a href="#dashboard" data-route="dashboard" class="side__link is-active">
           <svg viewBox="0 0 24 24"><path d="M4 13h7V4H4zm0 7h7v-5H4zm9 0h7v-9h-7zm0-16v5h7V4z"/></svg>
           Dashboard
-        </a>
-        <a href="#people" data-route="people" class="side__link">
-          <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
-          Find people
         </a>
         <a href="#inbox" data-route="inbox" class="side__link">
           <svg viewBox="0 0 24 24"><path d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 12h-4a3 3 0 0 1-6 0H5V5h14z"/></svg>
@@ -65,7 +61,7 @@
       <header class="topbar">
         <div class="topbar__search">
           <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
-          <input id="global-search" type="text" placeholder="Search people, companies…" />
+          <input id="global-search" type="text" placeholder="Search, or press Enter to add a keyword filter…" />
         </div>
         <div class="topbar__right">
           <span class="topbar__streak" id="streak" title="Days in a row you've shown up"><i></i>1-day streak</span>
@@ -75,6 +71,7 @@
               <div class="acct__who"><strong id="acct-name"></strong><small id="acct-email"></small></div>
               <a href="#profile">Profile</a>
               <a href="#settings">Settings</a>
+              <button id="acct-tour">Take the tour</button>
               <button id="acct-logout">Log out</button>
             </div>
           </div>
@@ -94,7 +91,7 @@
 
   <script src="../vendor/supabase.js"></script>
   <script src="config.js" onerror="void 0"></script>
-  <script src="auth.js?v=20260611-google-connect"></script>
-  <script src="app.js?v=20260611-google-connect"></script>
+  <script src="auth.js?v=20260612-filters-tour"></script>
+  <script src="app.js?v=20260612-filters-tour"></script>
 </body>
 </html>

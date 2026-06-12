@@ -25,6 +25,12 @@ const apiRoutes = [
   "api/dashboard/doors.js",
   "api/google/callback.js",
   "api/google/connect.js",
+  "api/linkedin/callback.js",
+  "api/linkedin/connect.js",
+  "api/connections/status.js",
+  "api/connections/disconnect.js",
+  "api/profile/parse-resume.js",
+  "api/profile/analyze-style.js",
   "api/sourcing/apollo.js",
   "api/sourcing/mock.js",
 ];
