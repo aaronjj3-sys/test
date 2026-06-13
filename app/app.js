@@ -3349,7 +3349,6 @@ async function fileToBase64(file) {
   return btoa(bin);
 }
 
-const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 const MAX_SAVED_ATTACHMENTS = 5;
 
 async function attachmentFromFile(file) {
