@@ -44,7 +44,7 @@ const state = {
   doorsMeta: load("knock_doors_meta", null),
   campaigns: load("knock_campaigns", []),
   messages: load("knock_messages", []),
-  connections: load("knock_connections", { google: false, outlook: false, linkedin: false }),
+  connections: load("knock_connections", { google: false, outlook: false }),
   autonomy: load("knock_autonomy", { review: true, followups: true, weekends: false, digest: true }),
   knocks: load("knock_left", 15),
   plan: load("knock_plan", "free"),
@@ -72,9 +72,10 @@ const saveApolloUsage = () => save("knock_apollo_usage", state.apolloUsage);
 state.connections = {
   google: Boolean(state.connections.google || state.connections.gmail || state.connections.gcal),
   outlook: Boolean(state.connections.outlook),
-  linkedin: Boolean(state.connections.linkedin),
 };
+if (state.sendPrefs?.channel === "linkedin") state.sendPrefs.channel = state.connections.google ? "gmail" : "queue";
 save("knock_connections", state.connections);
+if (state.sendPrefs) save("knock_send_prefs", state.sendPrefs);
 const saveLive = () => {
   save("knock_doors", state.doors);
   save("knock_doors_meta", state.doorsMeta);
@@ -372,7 +373,6 @@ const I = {
   story: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 12a5 5 0 1 0-5-5 5 5 0 0 0 5 5zm0 2c-3.34 0-10 1.67-10 5v3h20v-3c0-3.33-6.66-5-10-5z"/></svg>',
   mail: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 4-8 5-8-5V6l8 5 8-5z"/></svg>',
   cal: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 2h2v2h6V2h2v2h3a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3zm14 8H3v10h18zM3 8h18V6H3z"/></svg>',
-  linkedin: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 3a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM2 9h4v12H2zM9 9h3.8v1.7h.1A4.2 4.2 0 0 1 16.6 9C20.6 9 21 11.6 21 15v6h-4v-5.3c0-1.3 0-2.9-1.8-2.9S13 14.2 13 15.6V21H9z"/></svg>',
   bell: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 22a2 2 0 0 0 2-2h-4a2 2 0 0 0 2 2zm6-6v-5a6 6 0 0 0-4.5-5.8V4.5a1.5 1.5 0 0 0-3 0v.7A6 6 0 0 0 6 11v5l-2 2v1h16v-1z"/></svg>',
   chat: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/></svg>',
   cap: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3 1 9l11 6 9-4.9V17h2V9zM5 13.2V17c0 1.7 3.1 3 7 3s7-1.3 7-3v-3.8l-7 3.8z"/></svg>',
@@ -422,7 +422,7 @@ function saveConnections() {
 function connectProvider(provider) {
   const user = window.knockAuth?.user || {};
   if ((window.knockAuth?.mode || "dev") !== "supabase" || !user.id || user.id === "dev") {
-    toast(`Connect ${provider === "google" ? "Google" : "LinkedIn"} requires Supabase login. Configure Supabase, log in, then try again`);
+    toast("Connect Google requires Supabase login. Configure Supabase, log in, then try again");
     return;
   }
   const params = new URLSearchParams({
@@ -433,20 +433,19 @@ function connectProvider(provider) {
   location.href = `/api/${provider}/connect?${params.toString()}`;
 }
 const connectGoogle = () => connectProvider("google");
-const connectLinkedIn = () => connectProvider("linkedin");
 
 function handleConnectReturn() {
   const url = new URL(location.href);
   let touched = false;
-  for (const provider of ["google", "linkedin"]) {
+  for (const provider of ["google"]) {
     const connected = url.searchParams.get(provider) === "connected";
     const error = url.searchParams.get(`${provider}_error`);
     if (connected) {
       state.connections[provider] = true;
       saveConnections();
-      toast(`${provider === "google" ? "Google" : "LinkedIn"} connected`);
+      toast("Google connected");
     } else if (error) {
-      toast(`${provider === "google" ? "Google" : "LinkedIn"} connect failed: ${esc(error)}`);
+      toast(`Google connect failed: ${esc(error)}`);
     }
     touched = touched || connected || Boolean(error);
   }
@@ -465,7 +464,7 @@ async function syncConnections() {
     const data = await res.json();
     if (!data.persisted) return;
     let changed = false;
-    for (const provider of ["google", "linkedin", "outlook"]) {
+    for (const provider of ["google", "outlook"]) {
       const isConnected = Boolean(data.connections[provider]?.connected);
       if (state.connections[provider] !== isConnected) {
         state.connections[provider] = isConnected;
@@ -487,7 +486,7 @@ async function disconnectProvider(provider) {
       body: JSON.stringify({ user_id: user.id, provider }),
     });
   } catch { /* local state already cleared */ }
-  toast(`${provider === "google" ? "Google" : provider === "linkedin" ? "LinkedIn" : "Outlook"} disconnected`);
+  toast(`${provider === "google" ? "Google" : "Outlook"} disconnected`);
   navigate();
 }
 
@@ -713,8 +712,7 @@ function doorRow(d, queuedIds) {
       <td>${ring(d.matchScore, 40)}</td>
       <td><div class="reasons">${(d.matchReasons || []).slice(0, 3).map((r) => `<span>${esc(r)}</span>`).join("")}</div></td>
       <td class="cell-draft"><b>${esc(d.draft?.subject || "")}</b><small>${esc((d.draft?.preview || "").slice(0, 90))}…</small></td>
-      <td class="cell-links">${d.linkedinUrl ? `<a href="${esc(d.linkedinUrl)}" target="_blank" rel="noopener" title="LinkedIn">${I.linkedin}</a>` : ""}
-          <button class="btn btn--paper btn--sm act-review" data-id="${d.id}">Review knock</button></td>
+      <td class="cell-links"><button class="btn btn--paper btn--sm act-review" data-id="${d.id}">Review knock</button></td>
     </tr>`;
 }
 
@@ -1438,7 +1436,6 @@ function openSendPrefs(onDone) {
     <label>Channel</label>
     <div class="chips-select sp-chan">
       ${channelRow("gmail", "Gmail", "", googleConnected())}
-      ${channelRow("linkedin", "LinkedIn", "", Boolean(state.connections.linkedin))}
       ${channelRow("queue", "Hold in queue", "", true)}
     </div>
     ${googleConnected() ? "" : `<p class="connlist__fine">Gmail isn't connected yet. Knocks stay safely queued until you connect it in Settings.</p>`}
@@ -1454,7 +1451,7 @@ function openSendPrefs(onDone) {
     </div>`);
   wireChips("sp-mode", { single: true });
   $$(".sp-chan .pill", modal).forEach((p) => p.addEventListener("click", () => {
-    if (p.dataset.off) { toast(`${p.dataset.v === "gmail" ? "Gmail" : "LinkedIn"} isn't connected yet. Connect it in Settings first`); return; }
+    if (p.dataset.off) { toast("Gmail isn't connected yet. Connect it in Settings first"); return; }
     $$(".sp-chan .pill", modal).forEach((x) => x.classList.toggle("is-on", x === p));
   }));
   $("#sp-save").addEventListener("click", () => {
@@ -1609,22 +1606,53 @@ function mountKdt(container) {
 /* approve modal: confirm the batch + optional "Send later" schedule */
 function openLaunchReview(selected) {
   const n = selected.length;
-  const resume = resumeFile();
-  const attachNote = state.sendPrefs?.attachResume
-    ? (resume ? `Your resume (${esc(resume.name)}) rides along with every knock. ` : "Resume attach is on, but no resume is on file yet, upload it on the Profile page. ")
-    : "";
+  const savedAttachments = state.profile?.savedAttachments || [];
+  const resumeAttachment = state.profile?.resumeAttachment || null;
+  const prefs = state.sendPrefs || { attachResume: false };
+  let oneOffAttachments = [];
   openModal(`
     <h2>Approve &amp; launch ${n} knock${n === 1 ? "" : "s"}</h2>
     <p class="sub">Scout finalizes each draft in your voice, then sends from your Gmail one by one. You'll see every status live. ${state.knocks} knock${state.knocks === 1 ? "" : "s"} left this month.</p>
     ${googleConnected() ? "" : `<p class="connlist__fine">Google isn't connected yet, so these will wait safely as "Connect Google" until you connect it.</p>`}
     <label>Send later (optional)</label>
-    <div class="kdt" id="lc-kdt"></div>
-    <p class="connlist__fine">${attachNote}Leave the time empty to send now; pick one and Gmail delivers them then.</p>
+    <input type="datetime-local" id="lc-when">
+    <p class="connlist__fine">Leave empty to send now. Pick a time and Gmail delivers them then.</p>
+    <label>Attachments</label>
+    <div class="launch-attachments">
+      <label class="checkrow ${resumeAttachment ? "" : "is-muted"}">
+        <input type="checkbox" id="lc-resume" ${prefs.attachResume && resumeAttachment ? "checked" : ""} ${resumeAttachment ? "" : "disabled"}>
+        <span>${resumeAttachment ? `Attach resume: ${esc(resumeAttachment.fileName)}` : "Re-upload your resume to attach it"}</span>
+      </label>
+      ${savedAttachments.length ? savedAttachments.map((a) => `
+        <label class="checkrow">
+          <input type="checkbox" class="lc-saved-att" data-id="${esc(a.id)}">
+          <span>${esc(attachmentLabel(a))}</span>
+        </label>`).join("") : `<p class="connlist__fine">No saved attachments. Add reusable files in Settings, or add a one-off file here.</p>`}
+      <div class="oneoff-list" id="lc-oneoff-list"></div>
+      <button class="btn btn--paper btn--sm" id="lc-add-file" type="button">${icon("doc")} Add one-off file</button>
+      <input type="file" id="lc-file" multiple hidden>
+    </div>
     <div class="modal__actions">
       <button class="btn btn--ghost" id="m-cancel">Cancel</button>
       <button class="btn btn--accent" id="lc-go">${googleConnected() ? "Launch" : "Queue knocks"}</button>
     </div>`);
-  const kdt = mountKdt($("#lc-kdt", modal));
+  const renderOneOff = () => {
+    const list = $("#lc-oneoff-list", modal);
+    if (!list) return;
+    list.innerHTML = oneOffAttachments.length
+      ? oneOffAttachments.map((a) => `<span class="filechip">${icon("doc")} ${esc(attachmentLabel(a))}</span>`).join("")
+      : "";
+  };
+  $("#lc-add-file").addEventListener("click", () => $("#lc-file").click());
+  $("#lc-file").addEventListener("change", async (e) => {
+    const files = [...(e.target.files || [])].slice(0, 6 - oneOffAttachments.length);
+    for (const file of files) {
+      const attachment = await attachmentFromFile(file);
+      if (attachment) oneOffAttachments.push(attachment);
+    }
+    renderOneOff();
+    e.target.value = "";
+  });
   $("#m-cancel").addEventListener("click", closeModal);
   $("#lc-go").addEventListener("click", () => {
     const when = kdt.getValue();
@@ -1635,12 +1663,22 @@ function openLaunchReview(selected) {
       }
       scheduleAt = when.toISOString();
     }
+    const attachments = [];
+    if ($("#lc-resume")?.checked && resumeAttachment) attachments.push({ ...resumeAttachment, id: "resume" });
+    $$(".lc-saved-att:checked", modal).forEach((box) => {
+      const att = savedAttachments.find((a) => a.id === box.dataset.id);
+      if (att) attachments.push({ ...att });
+    });
+    attachments.push(...oneOffAttachments.map((a) => ({ ...a })));
+    if (scheduleAt && attachments.some((a) => a.id !== "resume")) {
+      return obError("#lc-add-file", "Send now to include one-off or selected saved attachments.");
+    }
     closeModal();
-    runLaunch(selected, scheduleAt);
+    runLaunch(selected, scheduleAt, attachments);
   });
 }
 
-async function runLaunch(selected, scheduleAt) {
+async function runLaunch(selected, scheduleAt, attachments = []) {
   try {
     const res = await fetch("/api/campaigns/create", {
       method: "POST",
@@ -1664,6 +1702,7 @@ async function runLaunch(selected, scheduleAt) {
         to: m.to || m.toEmail || d?.email || "",
         toName: m.toName || d?.name || "",
         scheduleAt: scheduleAt || m.scheduledAt || null,
+        attachments: attachments.map((a) => ({ ...a })),
       });
     }
     state.selectedDoors = new Set();
@@ -1846,7 +1885,7 @@ async function processSingleSend(m) {
           id: m.id, doorId: m.doorId, campaignId: m.campaignId,
           to: m.to, toName: m.toName || m.name || d?.name || "",
           subject: noEmDash(m.subject), body: noEmDash(m.body),
-          attachmentIds: m.attachmentIds || attachmentIdsForDoor(d),
+          attachments: m.attachments || [],
         },
         scheduleAt: m.scheduleAt || undefined,
       }),
@@ -1856,6 +1895,7 @@ async function processSingleSend(m) {
       if (data.gmailMessageId) m.gmailMessageId = data.gmailMessageId;
       if (data.gmailThreadId) m.gmailThreadId = data.gmailThreadId;
       m.error = null;
+      if (m.attachments?.length && data.status !== "scheduled") delete m.attachments;
       m.history = [
         ...(m.history || []),
         { at: new Date().toISOString(), type: data.status === "scheduled" ? "scheduled" : "sent", label: noEmDash(m.subject), body: noEmDash(m.body) },
@@ -1924,7 +1964,6 @@ function updateMessageRow(m) {
 const CONNECTIONS = [
   { id: "google", icn: "mail", name: "Google", sub: "Connect Gmail and Calendar to send emails, detect replies, and schedule meetings." },
   { id: "outlook", icn: "mail", name: "Outlook", sub: "school and work inboxes welcome" },
-  { id: "linkedin", icn: "linkedin", name: "LinkedIn", sub: "DMs and connection notes, same voice" },
 ];
 
 function openConnections() {
@@ -1941,7 +1980,7 @@ function openConnections() {
             : `<button class="btn btn--sm end act-connect">${c.id === "google" ? "Connect Google" : "Connect"}</button>`}
         </div>`).join("")}
     </div>
-    <p class="connlist__fine">Google connects Gmail and Calendar. LinkedIn connects your identity for DMs and connection notes.</p>
+    <p class="connlist__fine">Google connects Gmail and Calendar. Additional channels can be managed later without changing your drafts.</p>
     <div class="modal__actions"><button class="btn btn--ghost" id="m-close">Done</button></div>`);
   const setConn = (id, val) => {
     state.connections[id] = val;
@@ -1953,14 +1992,13 @@ function openConnections() {
     b.addEventListener("click", (e) => {
       const id = e.target.closest(".connrow").dataset.id;
       if (id === "google") return connectGoogle();
-      if (id === "linkedin") return connectLinkedIn();
       setConn(id, true);
     }));
   $$(".act-disconnect", modal).forEach((b) =>
     b.addEventListener("click", (e) => {
       const id = e.target.closest(".connrow").dataset.id;
       closeModal();
-      if (id === "google" || id === "linkedin") return disconnectProvider(id);
+      if (id === "google") return disconnectProvider(id);
       setConn(id, false);
     }));
   $("#m-close", modal).addEventListener("click", closeModal);
@@ -1993,15 +2031,11 @@ function renderInbox() {
     save("knock_inbox_selected", selected.id);
   }
 
-  /* the conversation: real mail only, no status/version noise. When synced
-     thread messages carry isFromMe we render the true thread; before the
-     first sync we show the original knock from our side. */
-  const threadMessages = selected?.threadMessages || [];
-  const threadHasMine = threadMessages.some((tm) => tm.isFromMe);
-  const snippet = (m) => {
-    const last = (m.threadMessages || []).filter((t) => !t.isFromMe).slice(-1)[0];
-    return (last?.body || m.body || "").replace(/\s+/g, " ").slice(0, 80);
-  };
+  const threadMessages = selected?.threadMessages?.length
+    ? selected.threadMessages
+    : selected?.body
+      ? [{ isFromMe: true, from: "You", date: selected.sentAt || selected.createdAt, body: selected.body, subject: selected.subject }]
+      : [];
 
   view.innerHTML = `<div class="viewwrap">
     <div class="vh vh--row">
@@ -2032,13 +2066,12 @@ function renderInbox() {
           <small>${esc(selected?.name || "")}${selected?.company ? " - " + esc(selected.company) : ""}${selected?.to ? " - " + esc(selected.to) : ""}</small>
         </div>
         <div class="threadview__msgs">
-          ${!threadHasMine && selected?.body ? `<div class="msg msg--you"><time>You - original knock</time>${esc(selected.body)}</div>` : ""}
           ${threadMessages.map((tm) => `
             <div class="msg ${tm.isFromMe ? "msg--you" : "msg--them"}">
-              <time>${esc(tm.isFromMe ? "You" : tm.from || selected?.name || "Them")}${tm.date ? " - " + new Date(tm.date).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}</time>
-              ${esc(tm.body || tm.subject || "")}
+              <time>${esc(tm.isFromMe ? "You" : tm.from || "Them")} ${tm.date ? " - " + new Date(tm.date).toLocaleString() : ""}</time>
+              <div class="msg__body">${esc(tm.body || tm.subject || "")}</div>
             </div>`).join("")}
-          ${selected?.suggestedReply ? `<div class="msg msg--draft"><time>Scout drafted this reply for you</time><b>${esc(selected.suggestedReply.subject || "")}</b><br>${esc(selected.suggestedReply.body || "")}</div>` : ""}
+          ${selected?.suggestedReply ? `<div class="msg msg--draft"><time>Scout draft</time><b>${esc(selected.suggestedReply.subject || "")}</b><div class="msg__body">${esc(selected.suggestedReply.body || "")}</div></div>` : ""}
         </div>
         <div class="threadview__reply">
           ${selected?.suggestedReply ? `<button class="btn btn--accent msg-reply" data-id="${selected.id}">Review &amp; send reply</button>` : `<button class="btn btn--paper" id="open-tracker">Open tracker</button>`}
@@ -2106,7 +2139,7 @@ function trackerRow(m) {
       <td><div class="cell-who"><div><strong>${esc(m.name || "Unknown")}</strong><small>${esc(m.title || "")}</small></div></div></td>
       <td>${m.company ? `<div class="cell-co">${logo(m.company, m.companyDomain, 26)}<span>${esc(m.company)}</span></div>` : "·"}</td>
       <td class="cell-draft"><b>${esc(m.subject)}</b>
-        ${m.meetLink ? `<small>${icon("cal")} Google Meet created · <a href="${esc(m.meetLink)}" target="_blank" rel="noopener">join link</a></small>` : ""}</td>
+        ${m.calendarLink ? `<small>${icon("cal")} Google Calendar created · <a href="${esc(m.calendarLink)}" target="_blank" rel="noopener">calendar link</a></small>` : ""}</td>
       <td class="cell-status">${msgStatusCell(m)}</td>
       <td class="cell-mono">${new Date(m.createdAt).toLocaleDateString()}</td>
       <td class="cell-msgact">${messageActions(m)}</td>
@@ -2220,10 +2253,11 @@ function openSuggestedReply(m) {
   const sr = m.suggestedReply || {};
   const subject = typeof sr === "string" ? `Re: ${m.subject}` : sr.subject || `Re: ${m.subject}`;
   const body = typeof sr === "string" ? sr : sr.body || "";
+  const replyKind = typeof sr === "object" && sr.kind === "followup" ? "followup" : "reply";
   openModal(`
     <h2>Suggested reply</h2>
     <p class="sub">To ${esc(m.name || "them")}${m.company ? " · " + esc(m.company) : ""}${summaryText(m) ? `<br>Scout's read: <b>${esc(summaryText(m))}</b>` : ""}</p>
-    ${m.meetLink ? `<p class="meetlink">${icon("cal")} Google Meet created · <a href="${esc(m.meetLink)}" target="_blank" rel="noopener">${esc(m.meetLink)}</a></p>` : ""}
+    ${m.calendarLink ? `<p class="meetlink">${icon("cal")} Google Calendar created · <a href="${esc(m.calendarLink)}" target="_blank" rel="noopener">${esc(m.calendarLink)}</a></p>` : ""}
     <label>Subject</label><input type="text" id="sr-subject" value="${esc(noEmDash(subject))}">
     <label>Reply</label><textarea id="sr-body" rows="8">${esc(noEmDash(body))}</textarea>
     <div class="modal__actions">
@@ -2260,16 +2294,17 @@ function openSuggestedReply(m) {
             to: m.to, toName: m.name || d?.name || "",
             subject: replySubject,
             body: replyBody,
+            kind: replyKind,
           },
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 412 || data.error === "google_not_connected") throw new Error("Google isn't connected");
-      if (!res.ok || !data.ok) throw new Error(data.error || `Send failed (${res.status})`);
-      /* they edited Scout's suggested reply before sending: learn from it */
-      if (finalBody && finalBody !== noEmDash(body).trim()) captureEditedSample(finalBody);
-      m.status = "replied";
+      if (!res.ok || !data.ok) throw new Error(data.message || data.error || `Send failed (${res.status})`);
+      m.status = replyKind === "followup" ? "followup_sent" : (m.status === "meeting" || sr.calendarEvent ? "meeting" : "replied");
       m.replySent = true;
+      if (replyKind === "followup") m.followupNumber = (m.followupNumber || 0) + 1;
+      delete m.suggestedReply;
       saveLive(); updateMessageRow(m); updateChrome();
       closeModal();
       toast("Reply sent. Scout keeps watching the thread");
@@ -2328,6 +2363,9 @@ async function runGmailSync() {
         m.updatedAt = new Date().toISOString();
       }
       if (u.meetLink) m.meetLink = u.meetLink;
+      if (u.calendarLink) m.calendarLink = u.calendarLink;
+      if (u.calendarEvent) m.calendarEvent = u.calendarEvent;
+      if (u.availabilityOptions) m.availabilityOptions = u.availabilityOptions;
       if (u.followupNumber != null) m.followupNumber = u.followupNumber;
       if (u.suggestedReply) {
         m.history = [
@@ -2958,12 +2996,7 @@ function renderProfile() {
     const zone = $("#resume-zone", view);
     if (zone) zone.innerHTML = `${icon("doc")} ${esc(f.name)}<br><small>Scout is re-reading it…</small>`;
     p.resumeFileName = f.name;
-    /* keep the actual file server-side so "attach my resume" really attaches it */
-    if (filesApiAvailable()) {
-      uploadUserFile(f, "resume").then((saved) => {
-        if (saved) { p.resumeFileId = saved.id; saveProfile(); }
-      });
-    }
+    p.resumeAttachment = await attachmentFromFile(f);
     const text = await readFileText(f);
     if (text) p.resumeText = text;
     const parsedResult = await requestResumeParse(f);
@@ -3004,6 +3037,8 @@ function renderProfile() {
 function renderSettings() {
   const user = window.knockAuth?.user || { email: "dev@knock.local", name: "Dev" };
   const isDev = (window.knockAuth?.mode || "dev") === "dev";
+  const p = state.profile || {};
+  const savedAttachments = p.savedAttachments || [];
   view.innerHTML = `<div class="viewwrap">
     <div class="vh"><h1>Settings</h1><p>How Scout behaves in other people's inboxes.</p></div>
     <div class="settings-grid">
@@ -3024,7 +3059,7 @@ function renderSettings() {
         <div class="setrow"><span class="ico">${I.cal}</span><div><strong>Weekend sends</strong><small>Off by default. Replies are 40% lower on weekends</small></div>
           <label class="switch end"><input type="checkbox" data-k="weekends" ${state.autonomy.weekends ? "checked" : ""}><i></i></label></div>
         <div class="setrow"><span class="ico">${I.plane}</span><div><strong>Sending preferences</strong><small>${state.sendPrefs
-          ? `${state.sendPrefs.mode === "auto" ? "Fully automated" : "Review every send"} · via ${state.sendPrefs.channel === "gmail" ? "Gmail" : state.sendPrefs.channel === "linkedin" ? "LinkedIn" : "queue"}${state.sendPrefs.attachResume ? " · resume attached" : ""}${state.sendPrefs.skipPrompt ? "" : " · confirmed each launch"}`
+          ? `${state.sendPrefs.mode === "auto" ? "Fully automated" : "Review every send"} · via ${state.sendPrefs.channel === "gmail" ? "Gmail" : "queue"}`
           : "Mode, channel, and attachments for your knocks"}</small></div>
           <button class="btn btn--paper btn--sm end" id="set-sendprefs">Edit</button></div>
       </div>
@@ -3039,10 +3074,19 @@ function renderSettings() {
         <input type="file" id="file-add-input" multiple hidden>
       </div>
       <div class="pcard">
+        <h3>Attachments</h3>
+        <div class="setrow"><span class="ico">${I.doc}</span><div><strong>My resume</strong><small>${p.resumeAttachment ? `${esc(p.resumeAttachment.fileName)} · attaches when "Attach my resume" is on` : "Re-upload your resume from Profile to attach it"}</small></div></div>
+        ${savedAttachments.map((a) => `
+          <div class="setrow"><span class="ico">${I.doc}</span><div><strong>${esc(a.fileName)}</strong><small>${Math.max(1, Math.round((a.size || 0) / 1024))} KB</small></div>
+            <button class="btn btn--paper btn--sm end saved-att-remove" data-id="${esc(a.id)}">Remove</button></div>`).join("")}
+        <div class="setrow"><span class="ico">${I.doc}</span><div><strong>Add attachment</strong><small>Up to ${MAX_SAVED_ATTACHMENTS} saved files, 5MB each. One-off message files are not saved here.</small></div>
+          <button class="btn btn--paper btn--sm end" id="set-att-upload">Upload</button></div>
+        <input type="file" id="set-att-file" multiple hidden>
+      </div>
+      <div class="pcard">
         <h3>Connections</h3>
         ${[
           ["google", "mail", "Google", "Connect Gmail and Calendar to send emails, detect replies, and schedule meetings."],
-          ["linkedin", "linkedin", "LinkedIn", "DMs and connection notes, same voice"],
         ].map(([id, icn, name, sub]) => `
         <div class="setrow"><span class="ico">${I[icn]}</span><div><strong>${name}</strong><small>${state.connections[id] ? "Connected · " + sub : "Not connected. " + sub[0].toUpperCase() + sub.slice(1)}</small></div>
           ${state.connections[id]
@@ -3072,6 +3116,29 @@ function renderSettings() {
   $("#set-sendprefs", view).addEventListener("click", () => openSendPrefs(renderSettings));
   $("#set-feedback", view).addEventListener("click", openFeedback);
   $("#set-connections", view).addEventListener("click", openConnections);
+  $("#set-att-upload", view)?.addEventListener("click", () => $("#set-att-file", view).click());
+  $("#set-att-file", view)?.addEventListener("change", async (e) => {
+    if (!state.profile) state.profile = {};
+    state.profile.savedAttachments = state.profile.savedAttachments || [];
+    for (const file of [...(e.target.files || [])]) {
+      if (state.profile.savedAttachments.length >= MAX_SAVED_ATTACHMENTS) {
+        toast(`Saved attachments are capped at ${MAX_SAVED_ATTACHMENTS}`);
+        break;
+      }
+      const attachment = await attachmentFromFile(file);
+      if (attachment) state.profile.savedAttachments.push(attachment);
+    }
+    saveProfile();
+    renderSettings();
+    toast("Attachment settings updated");
+  });
+  $$(".saved-att-remove", view).forEach((b) => b.addEventListener("click", () => {
+    if (!state.profile) return;
+    state.profile.savedAttachments = (state.profile.savedAttachments || []).filter((a) => a.id !== b.dataset.id);
+    saveProfile();
+    renderSettings();
+    toast("Attachment removed from Settings");
+  }));
   $("#set-logout", view).addEventListener("click", () => window.knockAuth.signOut());
   $("#set-reset", view).addEventListener("click", () => {
     openModal(`
@@ -3093,7 +3160,6 @@ function renderSettings() {
   });
   $$(".conn-on", view).forEach((b) => b.addEventListener("click", () => {
     if (b.dataset.id === "google") return connectGoogle();
-    if (b.dataset.id === "linkedin") return connectLinkedIn();
   }));
   $$(".conn-off", view).forEach((b) => b.addEventListener("click", () => disconnectProvider(b.dataset.id)));
 
@@ -3283,6 +3349,29 @@ async function fileToBase64(file) {
   return btoa(bin);
 }
 
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const MAX_SAVED_ATTACHMENTS = 5;
+
+async function attachmentFromFile(file) {
+  if (!file) return null;
+  if (file.size > MAX_ATTACHMENT_BYTES) {
+    toast(`${esc(file.name)} is over 5MB, so it was skipped`);
+    return null;
+  }
+  return {
+    id: crypto.randomUUID ? crypto.randomUUID() : `att_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+    fileName: file.name,
+    mimeType: file.type || "application/octet-stream",
+    size: file.size,
+    contentBase64: await fileToBase64(file),
+  };
+}
+
+function attachmentLabel(a) {
+  const kb = Math.max(1, Math.round(Number(a?.size || 0) / 1024));
+  return `${a?.fileName || "attachment"}${kb ? ` (${kb} KB)` : ""}`;
+}
+
 /* POST the resume to the AI parser; null when the parser can't help */
 async function requestResumeParse(file) {
   try {
@@ -3450,6 +3539,7 @@ function openOnboarding(step = 1) {
       if (!f) return;
       OB.story = $("#ob-story", modal)?.value.trim() ?? OB.story;
       OB.resumeFileName = f.name;
+      OB.resumeAttachment = await attachmentFromFile(f);
       const zone = $("#ob-zone", modal);
       zone.classList.add("is-filled");
       zone.innerHTML = `${icon("doc")} ${esc(f.name)}<br><small>Scout is reading it…</small>`;
@@ -3631,7 +3721,7 @@ async function finishOnboarding() {
     currentRole: OB.currentRole || "",
     story: OB.story || "",
     resumeFileName: OB.resumeFileName || "",
-    resumeFileId: OB.resumeFileId || "",
+    resumeAttachment: OB.resumeAttachment || null,
     resumeText: OB.resumeText || "",
     target: (OB.targetRoles || []).join(", ") || "founders and operators",
     industries: OB.industries || [],
@@ -3697,7 +3787,7 @@ const TOUR_STEPS = [
   { route: "inbox", sel: ".ghost, .inbox", title: "Inbox", text: "Replies land here once Google is connected, warmest threads first. The Connections button manages every channel." },
   { route: "tracker", sel: ".funnel-tabs", title: "Tracker", text: "Watch every knock live: drafting, sending, sent, replied, meeting booked. Pause, retry, or review Scout's suggested replies right from the table." },
   { route: "profile", sel: ".profile-grid", title: "Your profile", text: "Everything Scout knows about you, parsed from your resume. Every field is editable, and every edit updates future drafts instantly." },
-  { route: "settings", sel: ".settings-grid", title: "Settings", text: "Connections (Google, LinkedIn), agent autonomy, sending preferences, and your plan all live here." },
+  { route: "settings", sel: ".settings-grid", title: "Settings", text: "Google connection, agent autonomy, sending preferences, attachments, and your plan all live here." },
 ];
 
 function waitForEl(sel, timeout = 2500) {

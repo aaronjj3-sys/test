@@ -12,7 +12,7 @@ import { openaiJSON, openaiConfigured, MODELS } from "../../lib/knock/openai.js"
 import { resumeSystem, RESUME_V2_JSON_SCHEMA } from "../../lib/knock/prompts.js";
 
 const MAX_FILE_BYTES = 6 * 1024 * 1024;
-const MAX_TEXT_CHARS = 24_000;
+const MAX_TEXT_CHARS = 80_000;
 
 /* education must never come back empty when the resume has an Education
    section: fall back to that section's items if the model skipped the array */
@@ -62,7 +62,7 @@ export default async function handler(req, res) {
         { type: "text", text: "Parse this resume PDF. Preserve the resume's original sections and return only structured JSON." },
       ],
       schema: RESUME_V2_SCHEMA,
-      maxTokens: 3500,
+      maxTokens: 8000,
     });
     if (parsed) {
       return res.status(200).json({
@@ -97,7 +97,7 @@ export default async function handler(req, res) {
       system: "You parse resumes into structured profile data for a cold-outreach product. Be faithful to the document: keep the person's numbers and phrasing in wins and bullets, fix obvious typos in proper nouns (school and company names), and never invent facts.",
       prompt: `Parse this resume:\n\n${text}`,
       schema: RESUME_V2_SCHEMA,
-      maxTokens: 3500,
+      maxTokens: 8000,
     });
     if (parsed) source = "claude";
   }
@@ -107,7 +107,7 @@ export default async function handler(req, res) {
       prompt: `Parse this resume:\n\n${text}`,
       schema: RESUME_V2_JSON_SCHEMA,
       model: MODELS.draft,
-      maxTokens: 3500,
+      maxTokens: 8000,
       effort: "low",
     });
     if (parsed) source = "openai";
