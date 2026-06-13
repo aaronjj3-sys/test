@@ -393,6 +393,20 @@ function toast(html, ms = 3200) {
   setTimeout(() => { t.style.opacity = 0; t.style.transition = "opacity .3s"; setTimeout(() => t.remove(), 320); }, ms);
 }
 
+function renderAppError(err, context = "render") {
+  const message = err?.message || String(err || "Unknown app error");
+  console.error(`[knock] ${context} failed:`, err);
+  view.innerHTML = `<div class="viewwrap"><div class="ghost">
+    <div class="ghost__icon">${I.bell}</div>
+    <h2>Knock hit a startup error.</h2>
+    <p>${esc(message)}</p>
+    <button class="btn btn--accent" id="app-reload">Reload app</button>
+    <p class="connlist__fine">If this keeps happening, restart the dev server and hard refresh the browser.</p>
+  </div></div>`;
+  $("#app-reload", view)?.addEventListener("click", () => location.reload());
+  window.__knockBooted = true;
+}
+
 function ring(match, size = 46) {
   const C = 2 * Math.PI * 19.5;
   return `<div class="ring" style="width:${size}px;height:${size}px">
@@ -574,15 +588,20 @@ async function refreshApolloUsage() {
 const routes = { dashboard: renderDashboard, people: renderDashboard, inbox: renderInbox, tracker: renderTracker, profile: renderProfile, settings: renderSettings };
 
 function navigate() {
-  const route = location.hash.replace("#", "") || "dashboard";
-  const fn = routes[route] || renderDashboard;
-  $$(".side__link").forEach((a) => a.classList.toggle("is-active", a.dataset.route === route));
-  view.scrollTop = 0;
-  fn();
-  updateChrome();
-  /* reply/follow-up sync runs while live message views are on screen */
-  if (route === "dashboard" || route === "people" || route === "tracker" || route === "inbox") startSyncPolling();
-  else stopSyncPolling();
+  try {
+    const route = location.hash.replace("#", "") || "dashboard";
+    const fn = routes[route] || renderDashboard;
+    $$(".side__link").forEach((a) => a.classList.toggle("is-active", a.dataset.route === route));
+    view.scrollTop = 0;
+    fn();
+    updateChrome();
+    window.__knockBooted = true;
+    /* reply/follow-up sync runs while live message views are on screen */
+    if (route === "dashboard" || route === "people" || route === "tracker" || route === "inbox") startSyncPolling();
+    else stopSyncPolling();
+  } catch (err) {
+    renderAppError(err, "route render");
+  }
 }
 window.addEventListener("hashchange", navigate);
 
@@ -3924,38 +3943,43 @@ $("#acct-tour")?.addEventListener("click", () => { $("#acct-menu").hidden = true
 
 /* ---------------- boot (auth-gated) ---------------- */
 (async function boot() {
-  /* brief loading state: never flash a login redirect while the session
-     check (and state hydration) is in flight */
-  view.innerHTML = `<div class="viewwrap"><div class="ghost ghost--boot">
-    <div class="ghost__icon ghost__icon--spin">${I.spark}</div>
-    <h2>Opening your doors…</h2>
-  </div></div>`;
-  const user = await window.knockAuth.ready;
-  if (!user) {
-    /* genuinely no session anywhere: back to the landing login */
-    location.replace("../index.html#login");
-    return;
-  }
-  /* tidy the URL after a magic-link / OAuth redirect */
-  if (/access_token|refresh_token|error_description/.test(location.hash)) {
-    history.replaceState(null, "", location.pathname + "#dashboard");
-  }
-  handleConnectReturn();
-  /* pull the profile and synced app state back from Supabase before
-     deciding on onboarding, so a new device starts with everything */
-  await hydrateFromSupabase();
-  initAccount();
-  navigate();
-  syncConnections();
-  refreshApolloUsage();
-  if (!state.profile) openOnboarding(1);
+  try {
+    /* brief loading state: never flash a login redirect while the session
+       check (and state hydration) is in flight */
+    view.innerHTML = `<div class="viewwrap"><div class="ghost ghost--boot">
+      <div class="ghost__icon ghost__icon--spin">${I.spark}</div>
+      <h2>Opening your doors…</h2>
+    </div></div>`;
+    const user = await window.knockAuth?.ready;
+    if (!user) {
+      /* genuinely no session anywhere: back to the landing login */
+      location.replace("../index.html#login");
+      return;
+    }
+    /* tidy the URL after a magic-link / OAuth redirect */
+    if (/access_token|refresh_token|error_description/.test(location.hash)) {
+      history.replaceState(null, "", location.pathname + "#dashboard");
+    }
+    handleConnectReturn();
+    /* pull the profile and synced app state back from Supabase before
+       deciding on onboarding, so a new device starts with everything */
+    await hydrateFromSupabase();
+    initAccount();
+    navigate();
+    syncConnections();
+    refreshApolloUsage();
+    if (!state.profile) openOnboarding(1);
 
-  /* resume the send pipeline after a reload or an OAuth round-trip:
-     un-stick anything caught mid-flight and release parked knocks */
-  let resumable = 0;
-  state.messages.forEach((m) => {
-    if (m.status === "drafting" || m.status === "sending") { m.status = "queued"; resumable++; }
-    if (m.status === "waiting_gmail" && googleConnected()) { m.status = "queued"; resumable++; }
-  });
-  if (resumable) { saveLive(); processSendQueue(); }
+    /* resume the send pipeline after a reload or an OAuth round-trip:
+       un-stick anything caught mid-flight and release parked knocks */
+    let resumable = 0;
+    state.messages.forEach((m) => {
+      if (m.status === "drafting" || m.status === "sending") { m.status = "queued"; resumable++; }
+      if (m.status === "waiting_gmail" && googleConnected()) { m.status = "queued"; resumable++; }
+    });
+    if (resumable) { saveLive(); processSendQueue(); }
+    window.__knockBooted = true;
+  } catch (err) {
+    renderAppError(err, "boot");
+  }
 })();
