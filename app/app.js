@@ -74,8 +74,13 @@ state.connections = {
   outlook: Boolean(state.connections.outlook),
 };
 if (state.sendPrefs?.channel === "linkedin") state.sendPrefs.channel = state.connections.google ? "gmail" : "queue";
-save("knock_connections", state.connections);
-if (state.sendPrefs) save("knock_send_prefs", state.sendPrefs);
+/* These run at top level, before the cross-device sync subsystem below is
+   defined. Write them straight to localStorage: going through save() would
+   call scheduleSyncAppState() for synced keys (knock_send_prefs) and hit a
+   temporal-dead-zone ReferenceError, taking down the whole script. There is
+   nothing to sync here anyway, auth isn't ready yet and hydrate runs next. */
+localStorage.setItem("knock_connections", JSON.stringify(state.connections));
+if (state.sendPrefs) localStorage.setItem("knock_send_prefs", JSON.stringify(state.sendPrefs));
 const saveLive = () => {
   save("knock_doors", state.doors);
   save("knock_doors_meta", state.doorsMeta);
@@ -1655,11 +1660,12 @@ function openLaunchReview(selected) {
   });
   $("#m-cancel").addEventListener("click", closeModal);
   $("#lc-go").addEventListener("click", () => {
-    const when = kdt.getValue();
+    const raw = $("#lc-when", modal)?.value;
     let scheduleAt = null;
-    if (when) {
+    if (raw) {
+      const when = new Date(raw);
       if (Number.isNaN(when.getTime()) || when.getTime() < Date.now()) {
-        return obError("#lc-kdt", "Pick a time in the future, or clear it to send now.");
+        return obError("#lc-when", "Pick a time in the future, or clear it to send now.");
       }
       scheduleAt = when.toISOString();
     }
@@ -2036,6 +2042,12 @@ function renderInbox() {
     : selected?.body
       ? [{ isFromMe: true, from: "You", date: selected.sentAt || selected.createdAt, body: selected.body, subject: selected.subject }]
       : [];
+
+  /* left-rail preview: their latest reply if any, else our outgoing copy */
+  const snippet = (m) => {
+    const last = (m.threadMessages || []).filter((t) => !t.isFromMe).slice(-1)[0];
+    return (last?.body || m.body || "").replace(/\s+/g, " ").slice(0, 80);
+  };
 
   view.innerHTML = `<div class="viewwrap">
     <div class="vh vh--row">
