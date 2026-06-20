@@ -31,6 +31,7 @@
 
   auth.signOut = async () => {
     localStorage.removeItem("knock_dev_session");
+    localStorage.removeItem("knock_active_user_id");
     if (auth.client) await auth.client.auth.signOut();
     location.href = landingUrl;
   };

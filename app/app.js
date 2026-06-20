@@ -277,13 +277,32 @@ function availableDoorsForLaunch() {
 /* email content hygiene: no em dashes in anything Scout sends */
 const noEmDash = (s) => String(s ?? "").replace(/\s+—\s+/g, ", ").replace(/—/g, "-");
 
-/* the authenticated user id (Supabase uuid, or "dev" in dev mode) */
-const userId = () => window.knockAuth?.user?.id || "dev";
+/* the authenticated user id (Supabase uuid, or "dev" in dev mode).
+   Keep the real id around after Google OAuth so Gmail features all use the
+   same connected account even if the in-memory auth object briefly falls
+   back to the dev placeholder after a reload. */
+const ACTIVE_USER_ID_KEY = "knock_active_user_id";
 const isRealUuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i.test(value || "");
+function rememberActiveUserId(value) {
+  if (isRealUuid(value)) localStorage.setItem(ACTIVE_USER_ID_KEY, value);
+}
+const userId = () => {
+  const live = window.knockAuth?.user?.id || "";
+  if (isRealUuid(live)) {
+    rememberActiveUserId(live);
+    return live;
+  }
+  const stored = localStorage.getItem(ACTIVE_USER_ID_KEY) || "";
+  return isRealUuid(stored) ? stored : "dev";
+};
 async function realUserIdFromAuth() {
   const auth = window.knockAuth;
-  if (isRealUuid(auth?.user?.id)) return auth.user.id;
-  if (!auth?.client) return "";
+  if (isRealUuid(auth?.user?.id)) {
+    rememberActiveUserId(auth.user.id);
+    return auth.user.id;
+  }
+  const stored = localStorage.getItem(ACTIVE_USER_ID_KEY) || "";
+  if (!auth?.client) return isRealUuid(stored) ? stored : "";
   try {
     const { data } = await auth.client.auth.getUser();
     if (isRealUuid(data?.user?.id)) {
@@ -296,9 +315,11 @@ async function realUserIdFromAuth() {
         avatar: data.user.user_metadata?.avatar_url || auth.user?.avatar,
         initials: (name || data.user.email || "?").split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((p) => p[0].toUpperCase()).join(""),
       };
+      rememberActiveUserId(data.user.id);
       return data.user.id;
     }
   } catch { /* session refresh failed; caller shows a clean login prompt */ }
+  if (isRealUuid(stored)) return stored;
   return "";
 }
 
@@ -525,14 +546,16 @@ function saveConnections() {
 
 /* Starts an OAuth connect flow and returns the user to the view they were
    on (inbox, dashboard, settings...) when the provider redirects back. */
-function connectProvider(provider) {
+async function connectProvider(provider) {
   const user = window.knockAuth?.user || {};
-  if ((window.knockAuth?.mode || "dev") !== "supabase" || !user.id || user.id === "dev") {
+  const realUserId = await realUserIdFromAuth();
+  if ((window.knockAuth?.mode || "dev") !== "supabase" || !realUserId) {
     toast("Connect Google requires Supabase login. Configure Supabase, log in, then try again");
     return;
   }
+  rememberActiveUserId(realUserId);
   const params = new URLSearchParams({
-    user_id: user.id,
+    user_id: realUserId,
     user_email: user.email || "",
     return_to: `${location.pathname || "/app/index.html"}${location.hash || "#dashboard"}`,
   });
@@ -547,6 +570,7 @@ function handleConnectReturn() {
     const connected = url.searchParams.get(provider) === "connected";
     const error = url.searchParams.get(`${provider}_error`);
     if (connected) {
+      if (isRealUuid(window.knockAuth?.user?.id)) rememberActiveUserId(window.knockAuth.user.id);
       state.connections[provider] = true;
       saveConnections();
       toast("Google connected");
@@ -563,10 +587,10 @@ function handleConnectReturn() {
 /* Server is the source of truth for connections: sync on boot so the UI
    shows what's actually connected, on every page and every device. */
 async function syncConnections() {
-  const user = window.knockAuth?.user;
-  if (!user?.id || user.id === "dev") return;
+  const realUserId = await realUserIdFromAuth();
+  if (!realUserId) return;
   try {
-    const res = await fetch(`/api/connections/status?user_id=${encodeURIComponent(user.id)}`);
+    const res = await fetch(`/api/connections/status?user_id=${encodeURIComponent(realUserId)}`);
     const data = await res.json();
     if (!data.persisted) return;
     let changed = false;
@@ -582,14 +606,14 @@ async function syncConnections() {
 }
 
 async function disconnectProvider(provider) {
-  const user = window.knockAuth?.user || {};
+  const realUserId = await realUserIdFromAuth();
   state.connections[provider] = false;
   saveConnections();
   try {
     await fetch("/api/connections/disconnect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: user.id, provider }),
+      body: JSON.stringify({ user_id: realUserId || userId(), provider }),
     });
   } catch { /* local state already cleared */ }
   toast(`${provider === "google" ? "Google" : "Outlook"} disconnected`);
@@ -3400,12 +3424,13 @@ function voiceLearningCardHTML() {
 }
 
 async function learnVoiceFromGmail() {
-  if (userId() === "dev") {
-    toast("Sign in with Google to learn your writing style.");
-    return;
-  }
+  const realUserId = await realUserIdFromAuth();
   if (!googleConnected()) {
     connectGoogle();
+    return;
+  }
+  if (!realUserId) {
+    toast("Reconnect Google so Scout can learn from your sent emails.");
     return;
   }
   openModal(`
@@ -3420,7 +3445,7 @@ async function learnVoiceFromGmail() {
     const res = await fetch("/api/gmail/learn-style", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: userId(), maxMessages: 100, months: 12, includeReplyPairs: true }),
+      body: JSON.stringify({ userId: realUserId, maxMessages: 100, months: 12, includeReplyPairs: true }),
     });
     const data = await res.json().catch(() => ({}));
     if (res.status === 412 || data.error === "google_not_connected") {
@@ -4215,7 +4240,7 @@ function renderSettings() {
       ["knock_profile", "knock_doors", "knock_doors_meta", "knock_campaigns", "knock_messages",
        "knock_connections", "knock_autonomy", "knock_left", "knock_plan", "knock_search_mode", "knock_ob_draft", "knock_days",
        "knock_filters", "knock_door_sort", "knock_send_prefs", "knock_tour_done", "knock_tracker_tab", "knock_state_updated_at",
-       "knock_strip_dismissed", "knock_inbox_selected", "knock_inbox_filter", "knock_profile_expanded"]
+       "knock_strip_dismissed", "knock_inbox_selected", "knock_inbox_filter", "knock_profile_expanded", ACTIVE_USER_ID_KEY]
         .forEach((k) => localStorage.removeItem(k));
       location.reload();
     });
@@ -5030,6 +5055,7 @@ $("#acct-tour")?.addEventListener("click", () => { $("#acct-menu").hidden = true
     if (/access_token|refresh_token|error_description/.test(location.hash)) {
       history.replaceState(null, "", location.pathname + "#dashboard");
     }
+    if (isRealUuid(user.id)) rememberActiveUserId(user.id);
     handleConnectReturn();
     /* pull the profile and synced app state back from Supabase before
        deciding on onboarding, so a new device starts with everything */
