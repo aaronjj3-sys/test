@@ -23,6 +23,7 @@ const apiRoutes = [
   "api/apollo/usage.js",
   "api/billing/redeem-code.js",
   "api/campaigns/create.js",
+  "api/config.js",
   "api/connections/disconnect.js",
   "api/connections/status.js",
   "api/cron/monitor.js",
