@@ -1,7 +1,7 @@
 /* GET /api/track/open?m=message_id&u=user_id
    Transparent 1x1 pixel used for best-effort email open tracking. */
 
-import { sbInsert, sbSelect, sbUpdate, supabaseConfigured } from "../../lib/supabase/admin.js";
+import { sbInsert, sbSelect, supabaseConfigured } from "../../lib/supabase/admin.js";
 
 const PIXEL = Buffer.from(
   "R0lGODlhAQABAPAAAP///wAAACH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==",
@@ -40,12 +40,8 @@ export default async function handler(req, res) {
       await sbInsert("email_events", [
         { user_id: userId, message_id: messageId, event_type: "opened", metadata: { source: "tracking_pixel" } },
       ]);
-      if (["sent", "followup_sent"].includes(row.status)) {
-        await sbUpdate("campaign_messages", { id: messageId, user_id: userId }, {
-          status: "opened",
-          updated_at: new Date().toISOString(),
-        });
-      }
+      /* Open tracking is noisy across Gmail/image proxy clients. Keep the raw
+         event for later analysis, but do not change the user-visible status. */
     }
   } catch {
     /* Never break image loading because tracking failed. */

@@ -21,7 +21,8 @@ const load = (k, fallback) => {
 const SYNCED_KEYS = new Set([
   "knock_doors", "knock_doors_meta", "knock_campaigns", "knock_messages",
   "knock_left", "knock_plan", "knock_search_mode", "knock_filters",
-  "knock_autonomy", "knock_send_prefs", "knock_tracker_tab",
+  "knock_door_sort", "knock_autonomy", "knock_send_prefs", "knock_tracker_tab",
+  "knock_inbox_filter",
 ]);
 const save = (k, v) => {
   localStorage.setItem(k, JSON.stringify(v));
@@ -38,6 +39,8 @@ if (localStorage.getItem("knock_v") !== "2") {
 
 /* ---------------- state ---------------- */
 const PAGE_SIZE = 25;
+const MAX_DOOR_PAGES = 25;
+const MAX_DOORS_LOADED = PAGE_SIZE * MAX_DOOR_PAGES;
 const state = {
   profile: load("knock_profile", null),
   doors: load("knock_doors", null),
@@ -50,9 +53,11 @@ const state = {
   plan: load("knock_plan", "free"),
   searchMode: load("knock_search_mode", "founders"),
   searchFilters: load("knock_filters", { keywords: [], industries: [], locations: [], companies: [] }),
+  doorSort: load("knock_door_sort", "match_desc"),
   sendPrefs: load("knock_send_prefs", null),
   profileExpanded: load("knock_profile_expanded", { sections: false, samples: false }),
   inboxSelectedId: load("knock_inbox_selected", null),
+  inboxFilter: load("knock_inbox_filter", "all"),
   apolloUsage: load("knock_apollo_usage", {
     configured: false,
     apiDayLeft: null,
@@ -67,8 +72,9 @@ const state = {
   sourcing: false,
   prefetchingDoors: false,
 };
-const knockLimit = () => (state.plan === "pro" ? 200 : 15);
+const knockLimit = () => (state.plan === "unlimited" ? 9999 : state.plan === "pro" ? 200 : 15);
 const saveApolloUsage = () => save("knock_apollo_usage", state.apolloUsage);
+const inboxComposerAttachments = new Map();
 state.connections = {
   google: Boolean(state.connections.google || state.connections.gmail || state.connections.gcal),
   outlook: Boolean(state.connections.outlook),
@@ -125,9 +131,11 @@ function buildAppState() {
     plan: state.plan,
     searchMode: state.searchMode,
     searchFilters: state.searchFilters,
+    doorSort: state.doorSort,
     autonomy: state.autonomy,
     sendPrefs: state.sendPrefs,
     trackerTab: state.trackerTab,
+    inboxFilter: state.inboxFilter,
   };
 }
 
@@ -156,7 +164,7 @@ document.addEventListener("visibilitychange", () => {
 /* message statuses only ever advance; a stale device can never un-send a knock */
 const STATUS_RANK = {
   drafting: 0, queued: 1, paused: 1, waiting_gmail: 1, sending: 2,
-  failed: 3, scheduled: 3, sent: 4, followup_sent: 5, opened: 6,
+  failed: 3, scheduled: 3, sent: 4, opened: 4, followup_sent: 5,
   replied: 7, needs_review: 7, meeting: 8,
 };
 
@@ -195,15 +203,19 @@ function adoptRemoteAppState(remote) {
       if (remote.plan) state.plan = remote.plan;
       if (remote.searchMode) state.searchMode = remote.searchMode;
       if (remote.searchFilters) state.searchFilters = remote.searchFilters;
+      if (remote.doorSort) state.doorSort = remote.doorSort;
       if (remote.autonomy) state.autonomy = remote.autonomy;
       if (remote.sendPrefs) state.sendPrefs = remote.sendPrefs;
       if (remote.trackerTab) state.trackerTab = remote.trackerTab;
+      if (remote.inboxFilter) state.inboxFilter = remote.inboxFilter;
       saveLive();
       save("knock_search_mode", state.searchMode);
       save("knock_filters", state.searchFilters);
+      save("knock_door_sort", state.doorSort);
       save("knock_autonomy", state.autonomy);
       save("knock_send_prefs", state.sendPrefs);
       save("knock_tracker_tab", state.trackerTab);
+      save("knock_inbox_filter", state.inboxFilter);
       save("knock_state_updated_at", remote.updatedAt || new Date().toISOString());
     } else {
       /* local is newer: still pick up more-advanced message statuses from remote */
@@ -355,7 +367,7 @@ const STATUS_UI = {
   sending: ["Sending", "sending"],
   sent: ["Sent", "sent"],
   followup_sent: ["Followed up", "followup"],
-  opened: ["Opened", "opened"],
+  opened: ["Sent", "sent"],
   replied: ["Replied", "replied"],
   needs_review: ["Reply drafted, review", "review"],
   waiting_gmail: ["Connect Google", "gmail"],
@@ -522,7 +534,7 @@ function updateChrome() {
   $("#knocks-left").textContent = state.knocks;
   $("#knocks-bar").style.width = Math.max(0, Math.min(100, (state.knocks / knockLimit()) * 100)) + "%";
   const planEl = $(".knocks-card__plan");
-  if (planEl) planEl.textContent = state.plan === "pro" ? "Pro plan · resets monthly" : "Free plan · resets monthly";
+  if (planEl) planEl.textContent = state.plan === "unlimited" ? "Unlimited plan" : state.plan === "pro" ? "Pro plan · resets monthly" : "Free plan · resets monthly";
   updateApolloCard();
   const badge = $("#inbox-badge");
   const needsReview = state.messages.filter((m) => m.status === "needs_review").length;
@@ -691,13 +703,14 @@ async function runSourcing() {
     clearInterval(ticker);
     state.sourcing = false;
     if (!res.ok) throw new Error(data.error || "Sourcing failed");
-    state.doors = data.doors;
+    state.doors = (data.doors || []).slice(0, MAX_DOORS_LOADED);
     state.doorsMeta = {
       ...data.meta,
       /* the initial bulk fetch covers pages 1..N in PAGE_SIZE units;
          prefetch continues from there with limit = PAGE_SIZE */
-      apolloPage: Math.max(data.meta?.page || 1, Math.ceil((data.doors || []).length / PAGE_SIZE)),
-      hasMore: data.meta?.hasMore === true,
+      apolloPage: Math.max(data.meta?.page || 1, Math.ceil(state.doors.length / PAGE_SIZE)),
+      hasMore: data.meta?.hasMore === true && state.doors.length < MAX_DOORS_LOADED,
+      capReached: (data.doors || []).length >= MAX_DOORS_LOADED && data.meta?.hasMore === true,
     };
     state.doorsPage = 0;
     state.selectedDoors = new Set();
@@ -736,18 +749,20 @@ function doorRow(d, queuedIds) {
 }
 
 function pager(total, page, idPrefix) {
-  const pages = Math.ceil(total / PAGE_SIZE);
+  const cappedTotal = idPrefix === "doors" ? Math.min(total, MAX_DOORS_LOADED) : total;
+  const pages = Math.ceil(cappedTotal / PAGE_SIZE);
   if (pages <= 1) return "";
   const from = page * PAGE_SIZE + 1;
-  const to = Math.min(total, (page + 1) * PAGE_SIZE);
+  const to = Math.min(cappedTotal, (page + 1) * PAGE_SIZE);
   const loading = idPrefix === "doors" && state.prefetchingDoors;
+  const capped = idPrefix === "doors" && total >= MAX_DOORS_LOADED && (state.doorsMeta || {}).hasMore;
   return `<div class="pager" id="${idPrefix}-pager">
-    <span class="pager__hint">Showing ${from}–${to} of ${total}</span>
+    <span class="pager__hint">Showing ${from}–${to} of ${cappedTotal}${capped ? " · refine search for more" : ""}</span>
     <button class="btn btn--paper btn--sm" data-p="${page - 1}" ${page === 0 ? "disabled" : ""}>← Prev</button>
     ${Array.from({ length: pages }, (_, i) =>
       `<button class="pager__num ${i === page ? "is-on" : ""}" data-p="${i}">${i + 1}</button>`).join("")}
     <button class="btn btn--paper btn--sm" data-p="${page + 1}" ${page >= pages - 1 ? "disabled" : ""}>Next →</button>
-    ${loading ? `<span class="pager__loading"><i></i>finding more…</span>` : ""}
+    ${loading ? `<span class="pager__loading"><i></i>finding more...</span>` : ""}
   </div>`;
 }
 
@@ -756,6 +771,11 @@ function pager(total, page, idPrefix) {
 async function prefetchNextDoorsPage() {
   if (state.prefetchingDoors || !state.profile || !(state.doors || []).length) return;
   if ((state.doorsMeta || {}).hasMore !== true) return;
+  if (state.doors.length >= MAX_DOORS_LOADED) {
+    state.doorsMeta = { ...(state.doorsMeta || {}), capReached: true };
+    refreshDoorsPager();
+    return;
+  }
   state.prefetchingDoors = true;
   refreshDoorsPager();
   try {
@@ -782,15 +802,17 @@ async function prefetchNextDoorsPage() {
       if (!res.ok) throw new Error(data.error || "prefetch failed");
       const seenIds = new Set(state.doors.map((d) => d.id));
       const seenApollo = new Set(state.doors.map((d) => d.apolloPersonId).filter(Boolean));
+      const room = Math.max(0, MAX_DOORS_LOADED - state.doors.length);
       const fresh = (data.doors || []).filter((d) =>
-        !seenIds.has(d.id) && !(d.apolloPersonId && seenApollo.has(d.apolloPersonId)));
+        !seenIds.has(d.id) && !(d.apolloPersonId && seenApollo.has(d.apolloPersonId))).slice(0, room);
       state.doors.push(...fresh);
       state.doorsMeta = {
         ...meta,
         ...data.meta,
         apolloPage: nextPage,
-        hasMore: data.meta?.hasMore === true,
+        hasMore: data.meta?.hasMore === true && state.doors.length < MAX_DOORS_LOADED,
         cursor: data.meta?.cursor || null,
+        capReached: state.doors.length >= MAX_DOORS_LOADED && data.meta?.hasMore === true,
       };
       noteApolloSearch(data.meta);
       saveLive();
@@ -898,6 +920,15 @@ function filterBar() {
   </div>`;
 }
 
+function sortedDoorsForDisplay(doors = []) {
+  const list = [...doors];
+  const byName = (d) => `${d.companyName || ""} ${d.name || ""}`.toLowerCase();
+  if (state.doorSort === "match_asc") return list.sort((a, b) => (a.matchScore || 0) - (b.matchScore || 0) || byName(a).localeCompare(byName(b)));
+  if (state.doorSort === "company_asc") return list.sort((a, b) => (a.companyName || "").localeCompare(b.companyName || "") || (b.matchScore || 0) - (a.matchScore || 0));
+  if (state.doorSort === "recent") return list.reverse();
+  return list.sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0) || byName(a).localeCompare(byName(b)));
+}
+
 function wireFilterBar() {
   const bar = $("#filterbar", view);
   if (!bar) return;
@@ -947,12 +978,13 @@ function wireFilterBar() {
 
 function renderDoorsQueue() {
   const doors = state.doors;
+  const displayDoors = sortedDoorsForDisplay(doors).slice(0, MAX_DOORS_LOADED);
   const meta = state.doorsMeta || {};
   const isMock = doors[0]?.source === "mock";
   const queuedIds = new Set(state.campaigns.flatMap((c) => c.selectedDoorIds));
-  const totalPages = Math.max(1, Math.ceil(doors.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(displayDoors.length / PAGE_SIZE));
   const page = Math.min(state.doorsPage, totalPages - 1);
-  const slice = doors.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const slice = displayDoors.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
   const avgMatch = Math.round(doors.reduce((s, d) => s + (d.matchScore || 0), 0) / doors.length);
   const allMode = state.searchMode === "all";
   const sentCount = state.messages.filter((m) => ["sent", "scheduled", "followup_sent", "opened", "replied", "needs_review", "meeting"].includes(m.status)).length;
@@ -969,7 +1001,7 @@ function renderDoorsQueue() {
       <div class="statcard"><small>Doors found</small><div class="num" id="stat-doors">${doors.length}</div><span class="delta">${allMode ? "highest matches, every persona" : "searching as " + modeLabel(state.searchMode)}</span></div>
       <div class="statcard"><small>Average match</small><div class="num">${avgMatch}%</div><span class="delta">scored against your story</span></div>
       <div class="statcard"><small>Knocks in motion</small><div class="num">${state.messages.length}</div><span class="delta">${sentCount} sent so far</span></div>
-      <div class="statcard"><small>Knocks left</small><div class="num">${state.knocks}</div><span class="delta">${state.plan === "pro" ? "pro" : "free"} plan · resets monthly</span></div>
+      <div class="statcard"><small>Knocks left</small><div class="num">${state.knocks}</div><span class="delta">${state.plan === "unlimited" ? "unlimited" : state.plan === "pro" ? "pro" : "free"} plan · resets monthly</span></div>
     </div>
 
     ${state.messages.length && !stripDismissed() ? `<div class="qbanner" id="send-strip">${sendStripHTML()}</div>` : ""}
@@ -980,6 +1012,14 @@ function renderDoorsQueue() {
       <div class="rowhead__actions">
         ${SEARCH_MODES_UI.map(([id, label]) =>
           `<button class="pill ${state.searchMode === id ? "is-on" : ""}" data-mode="${id}">${label}</button>`).join("")}
+        <label class="sortctl">Sort
+          <select id="door-sort">
+            <option value="match_desc" ${state.doorSort === "match_desc" ? "selected" : ""}>Match high to low</option>
+            <option value="match_asc" ${state.doorSort === "match_asc" ? "selected" : ""}>Match low to high</option>
+            <option value="company_asc" ${state.doorSort === "company_asc" ? "selected" : ""}>Company A-Z</option>
+            <option value="recent" ${state.doorSort === "recent" ? "selected" : ""}>Newest found</option>
+          </select>
+        </label>
         <button class="btn btn--paper btn--sm" id="add-contact" title="Track someone you found yourself">+ Add contact</button>
         <button class="btn btn--sm" id="launch" disabled>Approve &amp; launch</button>
       </div>
@@ -989,7 +1029,7 @@ function renderDoorsQueue() {
       <thead><tr><th><input type="checkbox" id="check-page" title="Select everyone on this page"></th><th>Person</th><th>Company</th><th>Match</th><th>Why</th><th>Draft</th><th></th></tr></thead>
       <tbody>${slice.map((d) => doorRow(d, queuedIds)).join("")}</tbody>
     </table></div>
-    ${pager(doors.length, page, "doors")}
+    ${pager(displayDoors.length, page, "doors")}
     ${(meta.warnings || []).map((w) => `<p class="meta-warn">${esc(w)}</p>`).join("")}
   </div>`;
 
@@ -1003,9 +1043,15 @@ function renderDoorsQueue() {
     save("knock_search_mode", state.searchMode);
     runSourcing();
   }));
+  $("#door-sort", view)?.addEventListener("change", (e) => {
+    state.doorSort = e.target.value;
+    state.doorsPage = 0;
+    save("knock_door_sort", state.doorSort);
+    renderDoorsQueue();
+  });
   wireDoorsPager();
-  /* user is on the last loaded UI page: preload the next Apollo page */
-  if (page >= totalPages - 1) prefetchNextDoorsPage();
+  /* user is close to the last loaded UI page: preload the next Apollo page */
+  if (page >= totalPages - 2) prefetchNextDoorsPage();
   const pageCheck = $("#check-page", view);
   pageCheck?.addEventListener("change", () => {
     slice.forEach((d) => {
@@ -1153,6 +1199,7 @@ function attachBlockHTML(d) {
   const resumeOn = attach.resume !== undefined ? attach.resume : Boolean(state.sendPrefs?.attachResume);
   const selected = new Set(attach.fileIds || []);
   const extras = attachmentFiles();
+  const oneOffs = d.oneOffAttachments || [];
   return `
     <label>Attachments</label>
     <div class="attachbox" id="attachbox">
@@ -1169,9 +1216,13 @@ function attachBlockHTML(d) {
           <span class="attachrow__name">${esc(f.name)}</span>
           <small>${Math.max(1, Math.round((f.sizeBytes || 0) / 1024))} KB</small>
         </label>`).join("")}
+      ${oneOffs.length ? `<div class="oneoff-list attach-oneoffs">${oneOffs.map((a) => `
+        <span class="filechip">${icon("doc")} ${esc(attachmentLabel(a))}
+          <button class="chip-x att-oneoff-remove" data-id="${esc(a.id)}" title="Remove">&times;</button>
+        </span>`).join("")}</div>` : ""}
       <div class="attachadd" id="att-drop">
-        <button type="button" class="pill" id="att-add">+ Add attachment</button>
-        <small>or drag &amp; drop · up to ${MAX_EXTRA_ATTACHMENTS} extra files, 5MB each</small>
+        <button type="button" class="pill" id="att-add">+ Add one-off file</button>
+        <small>or drag &amp; drop · sent with this knock only</small>
         <input type="file" id="att-input" multiple hidden>
       </div>
     </div>`;
@@ -1188,20 +1239,24 @@ function wireAttachBlock(d, rerender) {
   const saveSel = () => { d.attach = readAttachSelection(); saveLive(); };
   $("#att-resume", modal)?.addEventListener("change", saveSel);
   $$(".att-file", modal).forEach((c) => c.addEventListener("change", saveSel));
+  $$(".att-oneoff-remove", modal).forEach((b) => b.addEventListener("click", () => {
+    d.oneOffAttachments = (d.oneOffAttachments || []).filter((a) => a.id !== b.dataset.id);
+    saveLive();
+    rerender();
+  }));
   const input = $("#att-input", modal);
   const addFiles = async (files) => {
-    const room = MAX_EXTRA_ATTACHMENTS - attachmentFiles().length;
+    const room = MAX_EXTRA_ATTACHMENTS - (d.oneOffAttachments || []).length;
     const list = [...(files || [])].slice(0, Math.max(0, room));
     if (!list.length && (files || []).length) {
-      toast(`You already have ${MAX_EXTRA_ATTACHMENTS} attachments saved. Remove one in Settings first`);
+      toast(`This knock already has ${MAX_EXTRA_ATTACHMENTS} one-off attachments`);
       return;
     }
     let added = 0;
     for (const f of list) {
-      const saved = await uploadUserFile(f, "attachment");
-      if (saved) {
-        d.attach = d.attach || { resume: Boolean(state.sendPrefs?.attachResume), fileIds: [] };
-        d.attach.fileIds = [...new Set([...(d.attach.fileIds || []), saved.id])];
+      const oneOff = await attachmentFromFile(f);
+      if (oneOff) {
+        d.oneOffAttachments = [...(d.oneOffAttachments || []), oneOff];
         added++;
       }
     }
@@ -1624,9 +1679,14 @@ function mountKdt(container) {
 
 /* approve modal: confirm the batch + optional "Send later" schedule */
 function openLaunchReview(selected) {
+  if (state.userFiles === null && filesApiAvailable()) {
+    openModal(`<h2>Loading attachments</h2><p class="sub">Fetching your saved resume and reusable files...</p>`, true);
+    loadUserFiles().then(() => openLaunchReview(selected));
+    return;
+  }
   const n = selected.length;
-  const savedAttachments = state.profile?.savedAttachments || [];
-  const resumeAttachment = state.profile?.resumeAttachment || null;
+  const savedAttachments = attachmentFiles();
+  const resumeAttachment = resumeFile();
   const prefs = state.sendPrefs || { attachResume: false };
   let oneOffAttachments = [];
   openModal(`
@@ -1634,18 +1694,18 @@ function openLaunchReview(selected) {
     <p class="sub">Scout finalizes each draft in your voice, then sends from your Gmail one by one. You'll see every status live. ${state.knocks} knock${state.knocks === 1 ? "" : "s"} left this month.</p>
     ${googleConnected() ? "" : `<p class="connlist__fine">Google isn't connected yet, so these will wait safely as "Connect Google" until you connect it.</p>`}
     <label>Send later (optional)</label>
-    <input type="datetime-local" id="lc-when">
+    <div id="lc-kdt" class="kdt"></div>
     <p class="connlist__fine">Leave empty to send now. Pick a time and Gmail delivers them then.</p>
     <label>Attachments</label>
     <div class="launch-attachments">
       <label class="checkrow ${resumeAttachment ? "" : "is-muted"}">
         <input type="checkbox" id="lc-resume" ${prefs.attachResume && resumeAttachment ? "checked" : ""} ${resumeAttachment ? "" : "disabled"}>
-        <span>${resumeAttachment ? `Attach resume: ${esc(resumeAttachment.fileName)}` : "Re-upload your resume to attach it"}</span>
+        <span>${resumeAttachment ? `Attach resume: ${esc(resumeAttachment.name)}` : "Upload your resume from Profile to attach it"}</span>
       </label>
       ${savedAttachments.length ? savedAttachments.map((a) => `
         <label class="checkrow">
           <input type="checkbox" class="lc-saved-att" data-id="${esc(a.id)}">
-          <span>${esc(attachmentLabel(a))}</span>
+          <span>${esc(a.name)}${formatBytes(a.sizeBytes) ? ` (${esc(formatBytes(a.sizeBytes))})` : ""}</span>
         </label>`).join("") : `<p class="connlist__fine">No saved attachments. Add reusable files in Settings, or add a one-off file here.</p>`}
       <div class="oneoff-list" id="lc-oneoff-list"></div>
       <button class="btn btn--paper btn--sm" id="lc-add-file" type="button">${icon("doc")} Add one-off file</button>
@@ -1655,6 +1715,7 @@ function openLaunchReview(selected) {
       <button class="btn btn--ghost" id="m-cancel">Cancel</button>
       <button class="btn btn--accent" id="lc-go">${googleConnected() ? "Launch" : "Queue knocks"}</button>
     </div>`);
+  const kdt = mountKdt($("#lc-kdt", modal));
   const renderOneOff = () => {
     const list = $("#lc-oneoff-list", modal);
     if (!list) return;
@@ -1682,22 +1743,20 @@ function openLaunchReview(selected) {
       }
       scheduleAt = when.toISOString();
     }
-    const attachments = [];
-    if ($("#lc-resume")?.checked && resumeAttachment) attachments.push({ ...resumeAttachment, id: "resume" });
+    const attachmentIds = [];
+    if ($("#lc-resume")?.checked && resumeAttachment) attachmentIds.push(resumeAttachment.id);
     $$(".lc-saved-att:checked", modal).forEach((box) => {
-      const att = savedAttachments.find((a) => a.id === box.dataset.id);
-      if (att) attachments.push({ ...att });
+      if (savedAttachments.some((a) => a.id === box.dataset.id)) attachmentIds.push(box.dataset.id);
     });
-    attachments.push(...oneOffAttachments.map((a) => ({ ...a })));
-    if (scheduleAt && attachments.some((a) => a.id !== "resume")) {
-      return obError("#lc-add-file", "Send now to include one-off or selected saved attachments.");
+    if (scheduleAt && oneOffAttachments.length) {
+      return obError("#lc-add-file", "Send now to include one-off attachments, or upload reusable files in Settings.");
     }
     closeModal();
-    runLaunch(selected, scheduleAt, attachments);
+    runLaunch(selected, scheduleAt, oneOffAttachments, attachmentIds);
   });
 }
 
-async function runLaunch(selected, scheduleAt, attachments = []) {
+async function runLaunch(selected, scheduleAt, oneOffAttachments = [], batchAttachmentIds = []) {
   try {
     const res = await fetch("/api/campaigns/create", {
       method: "POST",
@@ -1709,6 +1768,8 @@ async function runLaunch(selected, scheduleAt, attachments = []) {
     state.campaigns.push(data.campaign);
     for (const m of data.messages || []) {
       const d = doorById(m.doorId);
+      const savedIds = [...new Set([...(attachmentIdsForDoor(d) || []), ...batchAttachmentIds])];
+      const oneOffsForDoor = [...(oneOffAttachments || []), ...((d && d.oneOffAttachments) || [])];
       state.messages.push({
         ...m,
         subject: noEmDash(m.subject),
@@ -1721,8 +1782,10 @@ async function runLaunch(selected, scheduleAt, attachments = []) {
         to: m.to || m.toEmail || d?.email || "",
         toName: m.toName || d?.name || "",
         scheduleAt: scheduleAt || m.scheduledAt || null,
-        attachments: attachments.map((a) => ({ ...a })),
+        attachmentIds: savedIds,
+        attachments: oneOffsForDoor.map((a) => ({ ...a })),
       });
+      if (d?.oneOffAttachments) delete d.oneOffAttachments;
     }
     state.selectedDoors = new Set();
     saveLive();
@@ -1901,9 +1964,10 @@ async function processSingleSend(m) {
       body: JSON.stringify({
         userId: userId(),
         message: {
-          id: m.id, doorId: m.doorId, campaignId: m.campaignId,
+	          id: m.id, doorId: m.doorId, campaignId: m.campaignId,
           to: m.to, toName: m.toName || m.name || d?.name || "",
           subject: noEmDash(m.subject), body: noEmDash(m.body),
+          attachmentIds: m.attachmentIds || attachmentIdsForDoor(d),
           attachments: m.attachments || [],
         },
         scheduleAt: m.scheduleAt || undefined,
@@ -2029,8 +2093,106 @@ function threadLastActivity(m) {
   return Math.max(Date.parse(m.updatedAt || m.createdAt) || 0, ...dates, 0);
 }
 
+function stripQuotedTextClient(text) {
+  const lines = String(text || "").replace(/\r/g, "\n").split("\n");
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    const hasContent = out.some((l) => l.trim());
+    if (hasContent && /^On\s.+(?:wrote:|<[^>]+>)/i.test(trimmed)) break;
+    if (hasContent && /^wrote:$/i.test(trimmed)) break;
+    if (/^-{2,}\s*Original Message\s*-{2,}$/i.test(trimmed)) break;
+    if (hasContent && /^(From|Sent|To|Cc|Subject|Date):\s/i.test(trimmed)) break;
+    if (/^>/.test(trimmed)) {
+      if (hasContent) break;
+      continue;
+    }
+    out.push(lines[i]);
+  }
+  return out.join("\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function htmlToPlain(html = "") {
+  const el = document.createElement("div");
+  el.innerHTML = html;
+  el.querySelectorAll("script,style,blockquote,.gmail_quote,.yahoo_quoted").forEach((n) => n.remove());
+  return stripQuotedTextClient((el.innerText || el.textContent || "").trim());
+}
+
+function sanitizeRichHtml(html = "") {
+  const template = document.createElement("template");
+  template.innerHTML = String(html || "");
+  const allowed = new Set(["B", "STRONG", "I", "EM", "U", "A", "UL", "OL", "LI", "BR", "P", "DIV"]);
+  const walk = (node) => {
+    for (const child of [...node.childNodes]) {
+      if (child.nodeType === Node.TEXT_NODE) continue;
+      if (child.nodeType !== Node.ELEMENT_NODE) { child.remove(); continue; }
+      if (!allowed.has(child.tagName)) {
+        child.replaceWith(...child.childNodes);
+        continue;
+      }
+      for (const attr of [...child.attributes]) {
+        const name = attr.name.toLowerCase();
+        if (child.tagName === "A" && name === "href" && /^(https?:|mailto:)/i.test(attr.value)) {
+          child.setAttribute("target", "_blank");
+          child.setAttribute("rel", "noopener");
+          continue;
+        }
+        child.removeAttribute(attr.name);
+      }
+      walk(child);
+    }
+  };
+  walk(template.content);
+  return template.innerHTML
+    .replace(/<div><br><\/div>/gi, "<br>")
+    .replace(/\s?on\w+="[^"]*"/gi, "")
+    .trim();
+}
+
+function threadBodyText(tm) {
+  const body = tm?.bodyHtml ? htmlToPlain(tm.bodyHtml) : (tm?.body || tm?.subject || "");
+  return stripQuotedTextClient(body);
+}
+
+function threadBodyHTML(tm) {
+  if (tm?.bodyHtml && tm.isFromMe) return sanitizeRichHtml(tm.bodyHtml);
+  const text = threadBodyText(tm);
+  return esc(text || tm?.subject || "").replace(/\n/g, "<br>");
+}
+
+function formatBytes(n) {
+  const bytes = Number(n || 0);
+  if (!bytes) return "";
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function attachmentChips(attachments = []) {
+  const files = (attachments || []).filter(Boolean);
+  if (!files.length) return "";
+  return `<div class="msg__files">${files.map((a) => `
+    <span class="filechip">${icon("doc")} ${esc(a.fileName || a.filename || a.name || "attachment")}${formatBytes(a.size || a.sizeBytes) ? ` · ${esc(formatBytes(a.size || a.sizeBytes))}` : ""}</span>
+  `).join("")}</div>`;
+}
+
+function latestInbound(m) {
+  return [...(m.threadMessages || [])].reverse().find((t) => !t.isFromMe) || null;
+}
+
+function lastReplyAt(m) {
+  return m.lastReplyAt || latestInbound(m)?.date || null;
+}
+
+function snippet(m) {
+  const newest = [...(m.threadMessages || [])].reverse().find((t) => threadBodyText(t)) || null;
+  return (threadBodyText(newest) || stripQuotedTextClient(m?.body || m?.subject || "") || "No message body yet").slice(0, 120);
+}
+
 /* the left-rail tag only flags what needs attention; plain "sent" is implied */
 function threadTag(m) {
+  if (m.flagged) return `<span class="warmtag warmtag--flag">flagged</span>`;
+  if (m.archivedAt) return `<span class="warmtag warmtag--dim">archived</span>`;
   if (m.unread) return `<span class="warmtag warmtag--new">new reply</span>`;
   if (m.status === "needs_review") return `<span class="warmtag">reply drafted - review</span>`;
   if (m.status === "replied" && m.suggestedReply && !m.replySent) return `<span class="warmtag">draft ready</span>`;
@@ -2040,9 +2202,237 @@ function threadTag(m) {
   return "";
 }
 
+const INBOX_FILTERS = [
+  ["all", "All"],
+  ["needs_review", "Needs review"],
+  ["replied", "Replied"],
+  ["meeting", "Meeting booked"],
+  ["sent", "Sent"],
+  ["flagged", "Flagged"],
+  ["archived", "Archived"],
+  ["deleted", "Hidden"],
+];
+
+function inboxMatches(m, filter = state.inboxFilter) {
+  if (filter === "deleted") return Boolean(m.deletedAt);
+  if (m.deletedAt) return false;
+  if (filter === "archived") return Boolean(m.archivedAt);
+  if (m.archivedAt && filter !== "flagged") return false;
+  if (filter === "flagged") return Boolean(m.flagged);
+  if (filter === "needs_review") return m.status === "needs_review";
+  if (filter === "replied") return ["replied", "needs_review"].includes(m.status);
+  if (filter === "meeting") return m.status === "meeting";
+  if (filter === "sent") return ["sent", "scheduled", "followup_sent", "opened", "waiting_gmail"].includes(m.status);
+  return true;
+}
+
+function normalizeThreadMessages(m) {
+  const list = m?.threadMessages?.length
+    ? m.threadMessages
+    : m?.body
+      ? [{ isFromMe: true, from: "You", date: m.sentAt || m.createdAt, body: m.body, subject: m.subject, attachments: m.attachments || [] }]
+      : [];
+  return list.filter((tm) => threadBodyText(tm) || tm.subject || (tm.attachments || []).length);
+}
+
+async function persistMessageOrg(m) {
+  if (!m || userId() === "dev") return;
+  try {
+    await fetch("/api/messages/organize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId: userId(),
+        messageId: m.id,
+        archivedAt: m.archivedAt || null,
+        deletedAt: m.deletedAt || null,
+        flagged: Boolean(m.flagged),
+      }),
+    });
+  } catch { /* local app_state still preserves organization */ }
+}
+
+function applyThreadRefresh(m, data) {
+  if (!m || !data?.ok) return false;
+  const keep = { archivedAt: m.archivedAt, deletedAt: m.deletedAt, flagged: m.flagged };
+  if (Array.isArray(data.threadMessages)) m.threadMessages = data.threadMessages;
+  if (data.lastReplyAt) m.lastReplyAt = data.lastReplyAt;
+  if (data.attachments) m.threadAttachments = data.attachments;
+  if (data.gmailThreadId) m.gmailThreadId = data.gmailThreadId;
+  if (data.gmailMessageId) m.gmailMessageId = data.gmailMessageId;
+  if (data.statusSuggestion && m.status !== "meeting") m.status = data.statusSuggestion;
+  Object.assign(m, keep);
+  m.updatedAt = new Date().toISOString();
+  return true;
+}
+
+async function refreshConversation(m, silent = false) {
+  if (!m) return false;
+  if (userId() === "dev") {
+    if (!silent) toast("Sign in with Google to refresh Gmail threads");
+    return false;
+  }
+  try {
+    const res = await fetch("/api/gmail/refresh-thread", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: userId(), messageId: m.id }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 412 || data.error === "google_not_connected") throw new Error("Google is not connected");
+    if (!res.ok || !data.ok) throw new Error(data.message || data.error || `Refresh failed (${res.status})`);
+    applyThreadRefresh(m, data);
+    saveLive();
+    if ((location.hash.replace("#", "") || "dashboard") === "inbox") renderInbox();
+    if (!silent) toast("Conversation refreshed from Gmail");
+    return true;
+  } catch (err) {
+    if (!silent) toast(`Could not refresh: ${esc(err.message)}`);
+    return false;
+  }
+}
+
+function polishCalendarReply(body, m) {
+  let text = noEmDash(body || "");
+  if (m?.calendarLink && /meet\.google\.com/i.test(text)) {
+    text = text
+      .replace(/https?:\/\/meet\.google\.com\/[^\s)]+/gi, "the Google Calendar invite")
+      .replace(/meet here:\s*the Google Calendar invite/gi, "I sent a Google Calendar invite for that time");
+  }
+  return text.trim();
+}
+
+function appendOutgoingThreadMessage(m, { subject, body, bodyHtml, attachments = [] }) {
+  m.threadMessages = normalizeThreadMessages(m);
+  m.threadMessages.push({
+    from: state.profile?.fullName || "You",
+    date: new Date().toISOString(),
+    subject,
+    body,
+    bodyHtml,
+    isFromMe: true,
+    attachments: attachments.map((a) => ({
+      fileName: a.fileName || a.name,
+      mimeType: a.mimeType || a.type,
+      size: a.size,
+    })),
+  });
+  m.lastReplyAt = lastReplyAt(m);
+  m.unread = false;
+  m.updatedAt = new Date().toISOString();
+}
+
+async function sendThreadReply(m, { subject, body, bodyHtml = "", attachments = [], kind = "reply" }) {
+  const d = messageDoor(m);
+  if (!m.to && d?.email) m.to = d.email;
+  if (!m.to && d?.apolloPersonId) m.to = await enrichDoorForEmail(d);
+  const replySubject = noEmDash(String(subject || `Re: ${m.subject || "quick question"}`).trim());
+  const replyBody = polishCalendarReply(String(body || "").trim(), m);
+  const safeHtml = bodyHtml ? sanitizeRichHtml(bodyHtml) : "";
+  if (!m.to) throw new Error("No verified email found. Apollo enrichment did not return one.");
+  if (!replySubject || !replyBody) throw new Error("Reply needs a subject and body.");
+  const res = await fetch("/api/gmail/send", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      userId: userId(),
+      message: {
+        id: m.id, doorId: m.doorId, campaignId: m.campaignId,
+        to: m.to, toName: m.name || d?.name || "",
+        subject: replySubject,
+        body: replyBody,
+        bodyHtml: safeHtml,
+        kind,
+        threadId: m.gmailThreadId,
+        attachments,
+      },
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 412 || data.error === "google_not_connected") throw new Error("Google isn't connected");
+  if (!res.ok || !data.ok) throw new Error(data.message || data.error || `Send failed (${res.status})`);
+  if (data.gmailThreadId) m.gmailThreadId = data.gmailThreadId;
+  if (data.gmailMessageId) m.gmailMessageId = data.gmailMessageId;
+  appendOutgoingThreadMessage(m, { subject: replySubject, body: replyBody, bodyHtml: safeHtml, attachments });
+  m.status = kind === "followup" ? "followup_sent" : (m.status === "meeting" ? "meeting" : "replied");
+  m.replySent = true;
+  if (kind === "followup") m.followupNumber = (m.followupNumber || 0) + 1;
+  delete m.suggestedReply;
+  saveLive();
+  updateMessageRow(m);
+  updateChrome();
+  refreshConversation(m, true);
+  return data;
+}
+
+function renderComposerChips(id) {
+  const host = $("#reply-files", view);
+  if (!host) return;
+  const files = inboxComposerAttachments.get(id) || [];
+  host.innerHTML = files.map((a) => `
+    <span class="filechip">${icon("doc")} ${esc(attachmentLabel(a))}
+      <button class="chip-x reply-file-remove" data-id="${esc(a.id)}" title="Remove">&times;</button>
+    </span>`).join("");
+  $$(".reply-file-remove", host).forEach((b) => b.addEventListener("click", () => {
+    inboxComposerAttachments.set(id, files.filter((a) => a.id !== b.dataset.id));
+    renderComposerChips(id);
+  }));
+}
+
+function wireReplyComposer(m) {
+  if (!m) return;
+  renderComposerChips(m.id);
+  $$(".rt-btn", view).forEach((b) => b.addEventListener("click", () => {
+    const cmd = b.dataset.cmd;
+    const editor = $("#reply-editor", view);
+    editor?.focus();
+    if (cmd === "createLink") {
+      const url = prompt("Link URL");
+      if (url && /^(https?:|mailto:)/i.test(url)) document.execCommand("createLink", false, url);
+      return;
+    }
+    document.execCommand(cmd, false, null);
+  }));
+  $("#reply-attach", view)?.addEventListener("click", () => $("#reply-file", view)?.click());
+  $("#reply-file", view)?.addEventListener("change", async (e) => {
+    const current = inboxComposerAttachments.get(m.id) || [];
+    const room = 6 - current.length;
+    const next = [];
+    for (const file of [...(e.target.files || [])].slice(0, Math.max(0, room))) {
+      const att = await attachmentFromFile(file);
+      if (att) next.push(att);
+    }
+    inboxComposerAttachments.set(m.id, [...current, ...next]);
+    e.target.value = "";
+    renderComposerChips(m.id);
+  });
+  $("#reply-send", view)?.addEventListener("click", async () => {
+    const btn = $("#reply-send", view);
+    const editor = $("#reply-editor", view);
+    const bodyHtml = sanitizeRichHtml(editor?.innerHTML || "");
+    const body = noEmDash(htmlToPlain(bodyHtml));
+    if (!body) { toast("Write a reply first"); return; }
+    btn.disabled = true; btn.textContent = "Sending...";
+    try {
+      await sendThreadReply(m, {
+        subject: `Re: ${m.subject || "quick question"}`,
+        body,
+        bodyHtml,
+        attachments: inboxComposerAttachments.get(m.id) || [],
+      });
+      inboxComposerAttachments.delete(m.id);
+      toast("Reply sent. Knock is watching the thread");
+      renderInbox();
+    } catch (err) {
+      btn.disabled = false; btn.textContent = "Send reply";
+      toast(`Could not send: ${esc(err.message)}`);
+    }
+  });
+}
+
 function renderInbox() {
   /* new replies first (lighted blue), then most recent activity downward */
-  const messages = [...state.messages].sort((a, b) =>
+  let messages = [...state.messages].filter((m) => inboxMatches(m)).sort((a, b) =>
     (b.unread ? 1 : 0) - (a.unread ? 1 : 0) || threadLastActivity(b) - threadLastActivity(a));
   const selected = messages.find((m) => m.id === state.inboxSelectedId) || messages[0];
   if (selected) {
@@ -2050,11 +2440,7 @@ function renderInbox() {
     save("knock_inbox_selected", selected.id);
   }
 
-  const threadMessages = selected?.threadMessages?.length
-    ? selected.threadMessages
-    : selected?.body
-      ? [{ isFromMe: true, from: "You", date: selected.sentAt || selected.createdAt, body: selected.body, subject: selected.subject }]
-      : [];
+  const threadMessages = normalizeThreadMessages(selected);
 
   view.innerHTML = `<div class="viewwrap">
     <div class="vh vh--row">
@@ -2063,6 +2449,10 @@ function renderInbox() {
         <p>Scout tracks every knock, reply, follow-up, and draft in one place.</p>
       </div>
       <button class="btn btn--paper" id="connections-btn">${icon("plug")} Connections</button>
+    </div>
+    <div class="inbox-filters">
+      ${INBOX_FILTERS.map(([id, label]) => `
+        <button class="pill ${state.inboxFilter === id ? "is-on" : ""}" data-filter="${id}">${label}</button>`).join("")}
     </div>
     ${messages.length ? `
     <div class="inbox">
@@ -2081,30 +2471,63 @@ function renderInbox() {
       </div>
       <div class="threadview">
         <div class="threadview__head">
-          <h3>${esc(selected?.subject || "Select a thread")}</h3>
-          <small>${esc(selected?.name || "")}${selected?.company ? " - " + esc(selected.company) : ""}${selected?.to ? " - " + esc(selected.to) : ""}</small>
+          <div>
+            <h3>${esc(selected?.subject || "Select a thread")}</h3>
+            <small>${esc(selected?.name || "")}${selected?.company ? " - " + esc(selected.company) : ""}${selected?.to ? " - " + esc(selected.to) : ""}</small>
+          </div>
+          <div class="thread-actions">
+            <button class="btn btn--paper btn--sm thread-refresh" data-id="${selected?.id || ""}">Refresh conversation</button>
+            <button class="btn btn--paper btn--sm thread-flag" data-id="${selected?.id || ""}">${selected?.flagged ? "Unflag" : "Flag"}</button>
+            <button class="btn btn--paper btn--sm thread-archive" data-id="${selected?.id || ""}">${selected?.archivedAt ? "Unarchive" : "Archive"}</button>
+            <button class="btn btn--paper btn--sm thread-hide" data-id="${selected?.id || ""}">${selected?.deletedAt ? "Restore" : "Hide"}</button>
+          </div>
         </div>
         <div class="threadview__msgs">
           ${threadMessages.map((tm) => `
             <div class="msg ${tm.isFromMe ? "msg--you" : "msg--them"}">
               <time>${esc(tm.isFromMe ? "You" : tm.from || "Them")} ${tm.date ? " - " + new Date(tm.date).toLocaleString() : ""}</time>
-              <div class="msg__body">${esc(tm.body || tm.subject || "")}</div>
+              <div class="msg__body">${threadBodyHTML(tm)}</div>
+              ${attachmentChips(tm.attachments)}
             </div>`).join("")}
           ${selected?.suggestedReply ? `<div class="msg msg--draft"><time>Scout draft</time><b>${esc(selected.suggestedReply.subject || "")}</b><div class="msg__body">${esc(selected.suggestedReply.body || "")}</div></div>` : ""}
         </div>
         <div class="threadview__reply">
-          ${selected?.suggestedReply ? `<button class="btn btn--accent msg-reply" data-id="${selected.id}">Review &amp; send reply</button>` : `<button class="btn btn--paper" id="open-tracker">Open tracker</button>`}
+          ${selected?.suggestedReply ? `<button class="btn btn--accent msg-reply" data-id="${selected.id}">Review &amp; send Scout draft</button>` : ""}
+          <button class="btn btn--paper" id="open-tracker">Open tracker</button>
+        </div>
+        <div class="replybox" data-id="${selected?.id || ""}">
+          <div class="replybar" aria-label="Formatting">
+            <button class="rt-btn" data-cmd="bold" title="Bold"><b>B</b></button>
+            <button class="rt-btn" data-cmd="italic" title="Italic"><i>I</i></button>
+            <button class="rt-btn" data-cmd="underline" title="Underline"><u>U</u></button>
+            <button class="rt-btn" data-cmd="insertUnorderedList" title="Bulleted list">•</button>
+            <button class="rt-btn" data-cmd="insertOrderedList" title="Numbered list">1.</button>
+            <button class="rt-btn" data-cmd="createLink" title="Link">link</button>
+            <button class="rt-btn" data-cmd="removeFormat" title="Clear formatting">clear</button>
+          </div>
+          <div class="replyeditor" id="reply-editor" contenteditable="true" role="textbox" aria-label="Reply"></div>
+          <div class="replyfoot">
+            <div class="oneoff-list" id="reply-files"></div>
+            <button class="btn btn--paper btn--sm" id="reply-attach" type="button">${icon("doc")} Attach</button>
+            <input type="file" id="reply-file" multiple hidden>
+            <button class="btn btn--accent btn--sm" id="reply-send" type="button">Send reply</button>
+          </div>
         </div>
       </div>
     </div>` : `
     <div class="ghost">
       <div class="ghost__icon">${I.mail}</div>
       <h2>No threads yet</h2>
-      <p>Launch your first campaign from the dashboard. Every sent knock, follow-up, reply, and Scout draft will show up here.</p>
+      <p>${state.inboxFilter === "all" ? "Launch your first campaign from the dashboard. Every sent knock, follow-up, reply, and Scout draft will show up here." : "Nothing matches this inbox filter yet."}</p>
       <button class="btn btn--accent" id="inbox-cta">Go to dashboard</button>
     </div>`}
   </div>`;
   $("#connections-btn", view).addEventListener("click", openConnections);
+  $$(".inbox-filters .pill", view).forEach((b) => b.addEventListener("click", () => {
+    state.inboxFilter = b.dataset.filter;
+    save("knock_inbox_filter", state.inboxFilter);
+    renderInbox();
+  }));
   $$(".thread-item", view).forEach((b) => b.addEventListener("click", () => {
     state.inboxSelectedId = b.dataset.id;
     const m = msgById(b.dataset.id);
@@ -2117,6 +2540,22 @@ function renderInbox() {
   $(".msg-reply", view)?.addEventListener("click", (e) => openSuggestedReply(msgById(e.target.dataset.id)));
   $("#open-tracker", view)?.addEventListener("click", () => { location.hash = "tracker"; });
   $("#inbox-cta", view)?.addEventListener("click", () => { location.hash = "dashboard"; });
+  $(".thread-refresh", view)?.addEventListener("click", () => refreshConversation(selected));
+  $(".thread-flag", view)?.addEventListener("click", () => {
+    selected.flagged = !selected.flagged;
+    saveLive(); persistMessageOrg(selected); renderInbox();
+  });
+  $(".thread-archive", view)?.addEventListener("click", () => {
+    selected.archivedAt = selected.archivedAt ? null : new Date().toISOString();
+    saveLive(); persistMessageOrg(selected); renderInbox();
+  });
+  $(".thread-hide", view)?.addEventListener("click", () => {
+    selected.deletedAt = selected.deletedAt ? null : new Date().toISOString();
+    saveLive(); persistMessageOrg(selected); renderInbox();
+  });
+  wireReplyComposer(selected);
+  const msgPane = $(".threadview__msgs", view);
+  if (msgPane) msgPane.scrollTop = msgPane.scrollHeight;
 }
 
 /* ============================================================
@@ -2124,8 +2563,7 @@ function renderInbox() {
    ============================================================ */
 const STAGES = [
   { id: "queued", label: "Queued", hint: "Drafting and sending", match: ["queued", "paused", "drafting", "sending", "scheduled", "waiting_gmail", "failed"] },
-  { id: "sent", label: "Sent", hint: "Knocked, waiting", match: ["sent", "followup_sent"] },
-  { id: "opened", label: "Opened", hint: "They're reading", match: ["opened"] },
+  { id: "sent", label: "Sent", hint: "Knocked, waiting", match: ["sent", "followup_sent", "opened"] },
   { id: "replied", label: "Replied", hint: "Door is open", match: ["replied", "needs_review"] },
   { id: "meeting", label: "Meeting booked", hint: "Go win", match: ["meeting"] },
 ];
@@ -2153,6 +2591,8 @@ const TRACKER_LINKABLE = new Set(["sent", "followup_sent", "opened", "replied", 
 
 function trackerRow(m) {
   const linkable = TRACKER_LINKABLE.has(m.status);
+  const replyAt = lastReplyAt(m);
+  const reply = latestInbound(m);
   return `
     <tr data-msg-id="${m.id}" class="${linkable ? "is-link" : ""}" ${linkable ? 'title="Open this conversation in the inbox"' : ""}>
       <td><div class="cell-who"><div><strong>${esc(m.name || "Unknown")}</strong><small>${esc(m.title || "")}</small></div></div></td>
@@ -2160,6 +2600,7 @@ function trackerRow(m) {
       <td class="cell-draft"><b>${esc(m.subject)}</b>
         ${m.calendarLink ? `<small>${icon("cal")} Google Calendar created · <a href="${esc(m.calendarLink)}" target="_blank" rel="noopener">calendar link</a></small>` : ""}</td>
       <td class="cell-status">${msgStatusCell(m)}</td>
+      <td class="cell-last-reply">${replyAt ? `<b>${new Date(replyAt).toLocaleDateString()}</b><small>${esc(threadBodyText(reply).slice(0, 90))}</small>` : "<span>--</span>"}</td>
       <td class="cell-mono">${new Date(m.createdAt).toLocaleDateString()}</td>
       <td class="cell-msgact">${messageActions(m)}</td>
     </tr>`;
@@ -2204,10 +2645,10 @@ function renderTracker() {
     ${state.messages.length ? `
     <div class="tablewrap" id="tracker-table">
       <table>
-        <thead><tr><th>Person</th><th>Company</th><th>Subject</th><th>Status</th><th>Queued</th><th></th></tr></thead>
+        <thead><tr><th>Person</th><th>Company</th><th>Subject</th><th>Status</th><th>Last Reply</th><th>Queued</th><th></th></tr></thead>
         <tbody>
           ${rows.map(trackerRow).join("")}
-          ${rows.length === 0 ? `<tr><td colspan="6"><div class="empty" style="height:110px">Nothing in this stage yet.</div></td></tr>` : ""}
+          ${rows.length === 0 ? `<tr><td colspan="7"><div class="empty" style="height:110px">Nothing in this stage yet.</div></td></tr>` : ""}
         </tbody>
       </table>
     </div>` : `
@@ -2289,44 +2730,19 @@ function openSuggestedReply(m) {
   });
   $("#sr-send").addEventListener("click", async () => {
     const btn = $("#sr-send");
-    btn.disabled = true; btn.textContent = "Sending…";
-    const finalBody = noEmDash($("#sr-body").value.trim());
+      btn.disabled = true; btn.textContent = "Sending…";
     try {
-      const d = messageDoor(m);
-      if (!m.to && d?.email) m.to = d.email;
-      if (!m.to && d?.apolloPersonId) {
-        btn.textContent = "Finding email...";
-        m.to = await enrichDoorForEmail(d);
-      }
       const replySubject = noEmDash($("#sr-subject").value.trim());
       const replyBody = noEmDash($("#sr-body").value.trim());
-      if (!m.to) throw new Error("No verified email found. Apollo enrichment did not return one.");
-      if (!replySubject || !replyBody) throw new Error("Reply needs a subject and body.");
-      const res = await fetch("/api/gmail/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId: userId(),
-          /* same message id so the server threads the reply onto the Gmail thread */
-          message: {
-            id: m.id, doorId: m.doorId, campaignId: m.campaignId,
-            to: m.to, toName: m.name || d?.name || "",
-            subject: replySubject,
-            body: replyBody,
-            kind: replyKind,
-          },
-        }),
+      await sendThreadReply(m, {
+        subject: replySubject,
+        body: replyBody,
+        bodyHtml: esc(replyBody).replace(/\n/g, "<br>"),
+        kind: replyKind,
       });
-      const data = await res.json().catch(() => ({}));
-      if (res.status === 412 || data.error === "google_not_connected") throw new Error("Google isn't connected");
-      if (!res.ok || !data.ok) throw new Error(data.message || data.error || `Send failed (${res.status})`);
-      m.status = replyKind === "followup" ? "followup_sent" : (m.status === "meeting" || sr.calendarEvent ? "meeting" : "replied");
-      m.replySent = true;
-      if (replyKind === "followup") m.followupNumber = (m.followupNumber || 0) + 1;
-      delete m.suggestedReply;
-      saveLive(); updateMessageRow(m); updateChrome();
       closeModal();
       toast("Reply sent. Scout keeps watching the thread");
+      if ((location.hash.replace("#", "") || "dashboard") === "inbox") renderInbox();
     } catch (err) {
       btn.disabled = false; btn.textContent = "Send reply";
       toast(`Could not send: ${esc(err.message)}`);
@@ -2381,6 +2797,8 @@ async function runGmailSync() {
         m.threadMessages = u.threadMessages;
         m.updatedAt = new Date().toISOString();
       }
+      if (u.lastReplyAt) m.lastReplyAt = u.lastReplyAt;
+      if (u.attachments) m.threadAttachments = u.attachments;
       if (u.meetLink) m.meetLink = u.meetLink;
       if (u.calendarLink) m.calendarLink = u.calendarLink;
       if (u.calendarEvent) m.calendarEvent = u.calendarEvent;
@@ -3057,7 +3475,6 @@ function renderSettings() {
   const user = window.knockAuth?.user || { email: "dev@knock.local", name: "Dev" };
   const isDev = (window.knockAuth?.mode || "dev") === "dev";
   const p = state.profile || {};
-  const savedAttachments = p.savedAttachments || [];
   view.innerHTML = `<div class="viewwrap">
     <div class="vh"><h1>Settings</h1><p>How Scout behaves in other people's inboxes.</p></div>
     <div class="settings-grid">
@@ -3093,16 +3510,6 @@ function renderSettings() {
         <input type="file" id="file-add-input" multiple hidden>
       </div>
       <div class="pcard">
-        <h3>Attachments</h3>
-        <div class="setrow"><span class="ico">${I.doc}</span><div><strong>My resume</strong><small>${p.resumeAttachment ? `${esc(p.resumeAttachment.fileName)} · attaches when "Attach my resume" is on` : "Re-upload your resume from Profile to attach it"}</small></div></div>
-        ${savedAttachments.map((a) => `
-          <div class="setrow"><span class="ico">${I.doc}</span><div><strong>${esc(a.fileName)}</strong><small>${Math.max(1, Math.round((a.size || 0) / 1024))} KB</small></div>
-            <button class="btn btn--paper btn--sm end saved-att-remove" data-id="${esc(a.id)}">Remove</button></div>`).join("")}
-        <div class="setrow"><span class="ico">${I.doc}</span><div><strong>Add attachment</strong><small>Up to ${MAX_SAVED_ATTACHMENTS} saved files, 5MB each. One-off message files are not saved here.</small></div>
-          <button class="btn btn--paper btn--sm end" id="set-att-upload">Upload</button></div>
-        <input type="file" id="set-att-file" multiple hidden>
-      </div>
-      <div class="pcard">
         <h3>Connections</h3>
         ${[
           ["google", "mail", "Google", "Connect Gmail and Calendar to send emails, detect replies, and schedule meetings."],
@@ -3116,8 +3523,10 @@ function renderSettings() {
       </div>
       <div class="pcard">
         <h3>Plan &amp; billing</h3>
-        <div class="setrow"><span class="ico">${I.cap}</span><div><strong>${state.plan === "pro" ? "Pro" : "Student · Free"}</strong><small>${state.knocks} of ${knockLimit()} knocks left this month</small></div>
-          ${state.plan === "pro" ? "" : `<button class="btn btn--sm end" id="set-upgrade">Go Pro</button>`}</div>
+        <div class="setrow"><span class="ico">${I.cap}</span><div><strong>${state.plan === "unlimited" ? "Unlimited" : state.plan === "pro" ? "Pro" : "Student · Free"}</strong><small>${state.knocks} of ${knockLimit()} knocks left this month</small></div>
+          ${state.plan === "free" ? `<button class="btn btn--sm end" id="set-upgrade">Go Pro</button>` : ""}</div>
+        <div class="setrow redeemrow"><span class="ico">${I.spark}</span><div><strong>Redeem code</strong><small>Use a Pro or test license key on this account</small></div>
+          <div class="redeemrow__form"><input id="pro-code" type="text" placeholder="License key"><button class="btn btn--paper btn--sm" id="pro-redeem">Redeem</button></div></div>
         <div class="setrow"><span class="ico">${I.bell}</span><div><strong>Daily digest</strong><small>One email: new matches + warm threads</small></div>
           <label class="switch end"><input type="checkbox" data-k="digest" ${state.autonomy.digest ? "checked" : ""}><i></i></label></div>
         <div class="setrow"><span class="ico">${I.chat}</span><div><strong>Feedback</strong><small>Tell us what to build next</small></div>
@@ -3135,29 +3544,7 @@ function renderSettings() {
   $("#set-sendprefs", view).addEventListener("click", () => openSendPrefs(renderSettings));
   $("#set-feedback", view).addEventListener("click", openFeedback);
   $("#set-connections", view).addEventListener("click", openConnections);
-  $("#set-att-upload", view)?.addEventListener("click", () => $("#set-att-file", view).click());
-  $("#set-att-file", view)?.addEventListener("change", async (e) => {
-    if (!state.profile) state.profile = {};
-    state.profile.savedAttachments = state.profile.savedAttachments || [];
-    for (const file of [...(e.target.files || [])]) {
-      if (state.profile.savedAttachments.length >= MAX_SAVED_ATTACHMENTS) {
-        toast(`Saved attachments are capped at ${MAX_SAVED_ATTACHMENTS}`);
-        break;
-      }
-      const attachment = await attachmentFromFile(file);
-      if (attachment) state.profile.savedAttachments.push(attachment);
-    }
-    saveProfile();
-    renderSettings();
-    toast("Attachment settings updated");
-  });
-  $$(".saved-att-remove", view).forEach((b) => b.addEventListener("click", () => {
-    if (!state.profile) return;
-    state.profile.savedAttachments = (state.profile.savedAttachments || []).filter((a) => a.id !== b.dataset.id);
-    saveProfile();
-    renderSettings();
-    toast("Attachment removed from Settings");
-  }));
+  $("#pro-redeem", view)?.addEventListener("click", redeemProCode);
   $("#set-logout", view).addEventListener("click", () => window.knockAuth.signOut());
   $("#set-reset", view).addEventListener("click", () => {
     openModal(`
@@ -3171,8 +3558,8 @@ function renderSettings() {
     $("#m-reset").addEventListener("click", () => {
       ["knock_profile", "knock_doors", "knock_doors_meta", "knock_campaigns", "knock_messages",
        "knock_connections", "knock_autonomy", "knock_left", "knock_plan", "knock_search_mode", "knock_ob_draft", "knock_days",
-       "knock_filters", "knock_send_prefs", "knock_tour_done", "knock_tracker_tab", "knock_state_updated_at",
-       "knock_strip_dismissed", "knock_inbox_selected", "knock_profile_expanded"]
+       "knock_filters", "knock_door_sort", "knock_send_prefs", "knock_tour_done", "knock_tracker_tab", "knock_state_updated_at",
+       "knock_strip_dismissed", "knock_inbox_selected", "knock_inbox_filter", "knock_profile_expanded"]
         .forEach((k) => localStorage.removeItem(k));
       location.reload();
     });
@@ -3285,6 +3672,33 @@ function openUpgrade() {
   $("#m-go").addEventListener("click", () => { closeModal(); toast("This is the MVP. Payments land next sprint"); });
 }
 $("#upgrade-btn").addEventListener("click", openUpgrade);
+
+async function redeemProCode() {
+  const input = $("#pro-code", view);
+  const btn = $("#pro-redeem", view);
+  const code = input?.value.trim();
+  if (!code) { toast("Enter a license key first"); return; }
+  btn.disabled = true; btn.textContent = "Checking...";
+  try {
+    const res = await fetch("/api/billing/redeem-code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: userId(), code }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || `Redeem failed (${res.status})`);
+    state.plan = data.plan || "pro";
+    state.knocks = Math.max(state.knocks || 0, knockLimit());
+    saveLive();
+    schedulePersistProfile();
+    toast(state.plan === "unlimited" ? "Unlimited access unlocked" : "Pro access unlocked");
+    renderSettings();
+    updateChrome();
+  } catch (err) {
+    btn.disabled = false; btn.textContent = "Redeem";
+    toast(`Code not accepted: ${esc(err.message)}`);
+  }
+}
 
 /* ============================================================
    ONBOARDING: builds the real profile that powers sourcing

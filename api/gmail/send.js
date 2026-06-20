@@ -9,7 +9,7 @@
 
 import { randomUUID } from "node:crypto";
 import { supabaseConfigured, sbSelect, sbInsert, sbUpdate } from "../../lib/supabase/admin.js";
-import { getGoogleConnection, sendEmail, getThread } from "../../lib/gmail/client.js";
+import { getGoogleConnection, sendEmail, getThread, loadAttachments } from "../../lib/gmail/client.js";
 import { monthlySendCount, planLimit } from "../../lib/gmail/sendQueue.js";
 
 function validUuid(value) {
@@ -47,6 +47,42 @@ function normalizeAttachments(attachments = []) {
     })
     .filter(Boolean)
     .slice(0, 6);
+}
+
+function stripHtml(value = "") {
+  return String(value || "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li)>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0?39;/g, "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function sanitizeHtml(value = "") {
+  const allowed = new Set(["b", "strong", "i", "em", "u", "a", "ul", "ol", "li", "br", "p", "div"]);
+  return String(value || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/\s+on\w+=(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/javascript:/gi, "")
+    .replace(/<(\/?)([a-z0-9]+)([^>]*)>/gi, (all, slash, tag, attrs) => {
+      const t = tag.toLowerCase();
+      if (!allowed.has(t)) return "";
+      if (slash) return `</${t}>`;
+      if (t !== "a") return `<${t}>`;
+      const href = String(attrs || "").match(/\shref=(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+      const url = href && (href[1] || href[2] || href[3] || "");
+      return /^(https?:|mailto:)/i.test(url) ? `<a href="${url.replace(/"/g, "&quot;")}">` : "<a>";
+    })
+    .trim();
 }
 
 async function persistMessage(userId, message, fields, options = {}) {
@@ -95,11 +131,13 @@ export default async function handler(req, res) {
 
   const { userId, scheduleAt } = req.body || {};
   const rawMessage = req.body?.message || {};
+  const htmlBody = sanitizeHtml(rawMessage.bodyHtml || rawMessage.htmlBody || "");
   const message = {
     ...rawMessage,
     to: String(rawMessage.to || "").trim(),
     subject: String(rawMessage.subject || "").trim(),
-    body: String(rawMessage.body || "").trim(),
+    body: String(rawMessage.body || stripHtml(htmlBody) || "").trim(),
+    bodyHtml: htmlBody,
     kind: String(rawMessage.kind || "").trim(),
   };
   if (!userId) return res.status(400).json({ error: "userId is required" });
@@ -128,7 +166,14 @@ export default async function handler(req, res) {
     : [];
   const existing = existingRows?.[0] || null;
   const isThreadReply = ["reply", "followup"].includes(message.kind);
-  const attachments = normalizeAttachments(rawMessage.attachments || req.body?.attachments);
+  const attachmentIds = Array.isArray(rawMessage.attachmentIds)
+    ? rawMessage.attachmentIds.filter(validUuid)
+    : [];
+  const savedAttachments = attachmentIds.length ? await loadAttachments(userId, attachmentIds.map((fileId) => ({ fileId }))) : [];
+  const attachments = [
+    ...savedAttachments,
+    ...normalizeAttachments(rawMessage.attachments || req.body?.attachments),
+  ].slice(0, 6);
 
   /* plan guard: knocks sent this calendar month */
   if (dbReady && !isThreadReply) {
@@ -147,8 +192,8 @@ export default async function handler(req, res) {
       messageId = await persistMessage(userId, message, {
         status: "scheduled",
         scheduled_at: new Date(Date.parse(scheduleAt)).toISOString(),
-        attachments: message.attachmentIds.length
-          ? message.attachmentIds.map((fileId) => ({ fileId }))
+        attachments: attachmentIds.length
+          ? attachmentIds.map((fileId) => ({ fileId }))
           : null,
       });
     }
@@ -169,9 +214,7 @@ export default async function handler(req, res) {
       }
     }
 
-    const trackOpenUrl = validUuid(message.id)
-      ? `${requestOrigin(req)}/api/track/open?m=${encodeURIComponent(message.id)}&u=${encodeURIComponent(userId)}`
-      : null;
+    const trackOpenUrl = null;
 
     const sent = await sendEmail({
       userId,
@@ -179,6 +222,7 @@ export default async function handler(req, res) {
       toName: message.toName,
       subject: message.subject,
       body: message.body,
+      bodyHtml: message.bodyHtml,
       threadId,
       inReplyTo,
       references,
