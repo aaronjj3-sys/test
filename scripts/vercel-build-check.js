@@ -30,6 +30,7 @@ const apiRoutes = [
   "api/files.js",
   "api/gmail/attachment.js",
   "api/gmail/import-thread.js",
+  "api/gmail/learn-style.js",
   "api/gmail/send.js",
   "api/gmail/sync.js",
   "api/google/callback.js",
@@ -44,6 +45,11 @@ const apiRoutes = [
   "api/sourcing/apollo.js",
   "api/sourcing/enrich.js",
   "api/sourcing/mock.js",
+];
+
+const requiredLibraryFiles = [
+  "lib/gmail/cleanEmail.js",
+  "lib/knock/analyzeStyle.js",
 ];
 
 const rootStaticFiles = [
@@ -68,7 +74,7 @@ const optionalStaticDirs = [
 
 const missing = [];
 
-for (const file of [...requiredFiles, ...apiRoutes]) {
+for (const file of [...requiredFiles, ...apiRoutes, ...requiredLibraryFiles]) {
   if (!existsSync(path.join(root, file))) missing.push(file);
 }
 

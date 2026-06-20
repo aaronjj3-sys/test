@@ -403,6 +403,34 @@ tbody tr:hover { background: var(--accent-soft); }
 .trait { background: var(--accent-soft); color: var(--accent-deep); border: 1.5px solid var(--accent); font-size: 0.7rem; font-weight: 800; padding: 0.3rem 0.75rem; border-radius: 999px; }
 .voicebox { margin-top: 1.2rem; text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 0.9rem 1rem; font-size: 0.78rem; color: var(--ink-soft); }
 .voicebox b { color: var(--ink); }
+.voicelearn-card { display: flex; flex-direction: column; gap: 0.8rem; }
+.voicelearn-card h3 { margin-bottom: 0; }
+.voicelearn-copy, .voicelearn-trust {
+  color: var(--ink-soft); font-size: 0.78rem; line-height: 1.45; font-weight: 500;
+}
+.voicelearn-status {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 0.8rem 0.9rem;
+}
+.voicelearn-status strong { display: block; font-size: 0.86rem; font-weight: 850; }
+.voicelearn-status small { display: block; color: var(--ink-faint); font-size: 0.72rem; font-weight: 600; margin-top: 0.2rem; }
+.voicelearn-summary { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.voicelearn-summary span {
+  border: 1.5px solid var(--border); border-radius: 99px; background: var(--accent-soft);
+  color: var(--ink); font-size: 0.7rem; font-weight: 750; padding: 0.28rem 0.62rem;
+}
+.voicelearn-summary--modal { margin: 0.4rem 0 1rem; }
+.voicelearn-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.voicelearn-steps { display: grid; gap: 0.65rem; margin-top: 1rem; }
+.voicelearn-steps span {
+  display: block; border: 1.5px solid var(--border); border-radius: 12px; background: var(--card);
+  padding: 0.75rem 0.9rem; font-size: 0.82rem; font-weight: 800; box-shadow: 2px 2px 0 var(--border);
+}
+.voice-group { margin-top: 1rem; }
+.voice-group h4 { font-size: 0.78rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.5rem; }
+.voice-sample { border: 1px solid var(--line); border-radius: 12px; background: var(--card); padding: 0.75rem 0.85rem; margin-top: 0.5rem; }
+.voice-sample strong { display: block; font-size: 0.82rem; font-weight: 850; }
+.voice-sample small { display: block; color: var(--ink-faint); font-size: 0.68rem; font-weight: 650; margin-top: 0.15rem; }
+.voice-sample p { color: var(--ink-soft); font-size: 0.76rem; line-height: 1.45; margin-top: 0.45rem; }
 .xp { display: flex; flex-direction: column; gap: 1.1rem; }
 .xp__item { padding-left: 1.1rem; border-left: 3px solid var(--accent); }
 .xp__item strong { font-size: 0.92rem; display: block; font-weight: 800; }
