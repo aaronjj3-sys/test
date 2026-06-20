@@ -84,7 +84,11 @@ export default async function handler(req, res) {
   const subject = clean(body.subject);
 
   if (!validUuid(userId)) {
-    return res.status(400).json({ ok: false, error: "invalid_user", message: "A real Supabase userId is required." });
+    return res.status(400).json({
+      ok: false,
+      error: "real_user_required",
+      message: "Sign in with Google to refresh Gmail threads.",
+    });
   }
 
   const row = await findRow(userId, { messageId, gmailThreadId, gmailMessageId });
@@ -93,7 +97,7 @@ export default async function handler(req, res) {
     return res.status(409).json({
       ok: false,
       error: "missing_thread_reference",
-      message: "This thread is not tracked yet.",
+      message: "This thread is not tracked by Gmail yet.",
     });
   }
 

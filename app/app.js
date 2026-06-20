@@ -262,6 +262,17 @@ const latestMsgForDoor = (doorId) => {
   }
   return null;
 };
+const DASHBOARD_PIPELINE_STATUSES = new Set([
+  "drafting", "sending", "queued", "paused", "scheduled", "waiting_gmail",
+  "failed", "sent", "opened", "followup_sent", "replied", "needs_review", "meeting",
+]);
+function doorIsActiveInPipeline(d) {
+  const m = latestMsgForDoor(d?.id);
+  return Boolean(m && DASHBOARD_PIPELINE_STATUSES.has(m.status));
+}
+function availableDoorsForLaunch() {
+  return (state.doors || []).filter((d) => !doorIsActiveInPipeline(d));
+}
 
 /* email content hygiene: no em dashes in anything Scout sends */
 const noEmDash = (s) => String(s ?? "").replace(/\s+—\s+/g, ", ").replace(/—/g, "-");
@@ -269,6 +280,27 @@ const noEmDash = (s) => String(s ?? "").replace(/\s+—\s+/g, ", ").replace(/—
 /* the authenticated user id (Supabase uuid, or "dev" in dev mode) */
 const userId = () => window.knockAuth?.user?.id || "dev";
 const isRealUuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i.test(value || "");
+async function realUserIdFromAuth() {
+  const auth = window.knockAuth;
+  if (isRealUuid(auth?.user?.id)) return auth.user.id;
+  if (!auth?.client) return "";
+  try {
+    const { data } = await auth.client.auth.getUser();
+    if (isRealUuid(data?.user?.id)) {
+      const name = data.user.user_metadata?.full_name || data.user.email || auth.user?.name || "";
+      auth.user = {
+        ...(auth.user || {}),
+        id: data.user.id,
+        email: data.user.email || auth.user?.email || "",
+        name,
+        avatar: data.user.user_metadata?.avatar_url || auth.user?.avatar,
+        initials: (name || data.user.email || "?").split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((p) => p[0].toUpperCase()).join(""),
+      };
+      return data.user.id;
+    }
+  } catch { /* session refresh failed; caller shows a clean login prompt */ }
+  return "";
+}
 
 /* ---------------- user files: resume + email attachments ----------------
    Stored server-side (user_files table via /api/files) so the actual bytes
@@ -878,7 +910,7 @@ async function prefetchNextDoorsPage() {
 /* targeted pager refresh, keeps table scroll position intact */
 function refreshDoorsPager() {
   if ((location.hash.replace("#", "") || "dashboard") !== "dashboard") return;
-  const doors = state.doors || [];
+  const doors = availableDoorsForLaunch();
   const old = $("#doors-pager", view);
   if (!old) {
     /* results used to fit one page and the pager wasn't rendered:
@@ -892,7 +924,7 @@ function refreshDoorsPager() {
   const next = holder.firstElementChild;
   if (next) { old.replaceWith(next); wireDoorsPager(); }
   const statDoors = $("#stat-doors", view);
-  if (statDoors) statDoors.textContent = doors.length;
+  if (statDoors) statDoors.textContent = (state.doors || []).length;
 }
 
 function wireDoorsPager() {
@@ -1026,10 +1058,12 @@ function wireFilterBar() {
 
 function renderDoorsQueue() {
   const doors = state.doors;
-  const displayDoors = sortedDoorsForDisplay(doors).slice(0, MAX_DOORS_LOADED);
+  const availableDoors = availableDoorsForLaunch();
+  state.selectedDoors = new Set([...state.selectedDoors].filter((id) => availableDoors.some((d) => d.id === id)));
+  const displayDoors = sortedDoorsForDisplay(availableDoors).slice(0, MAX_DOORS_LOADED);
   const meta = state.doorsMeta || {};
   const isMock = doors[0]?.source === "mock";
-  const queuedIds = new Set(state.campaigns.flatMap((c) => c.selectedDoorIds));
+  const queuedIds = new Set();
   const totalPages = Math.max(1, Math.ceil(displayDoors.length / PAGE_SIZE));
   const page = Math.min(state.doorsPage, totalPages - 1);
   const slice = displayDoors.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -1052,7 +1086,7 @@ function renderDoorsQueue() {
       <div class="statcard"><small>Knocks left</small><div class="num">${state.knocks}</div><span class="delta">${state.plan === "unlimited" ? "unlimited" : state.plan === "pro" ? "pro" : "free"} plan · resets monthly</span></div>
     </div>
 
-    ${state.messages.length && !stripDismissed() ? `<div class="qbanner" id="send-strip">${sendStripHTML()}</div>` : ""}
+    ${shouldShowSendStrip() && !stripDismissed() ? `<div class="qbanner" id="send-strip">${sendStripHTML()}</div>` : ""}
 
     <div class="rowhead">
       <h2>Your launch queue</h2>
@@ -1073,18 +1107,26 @@ function renderDoorsQueue() {
       </div>
     </div>
     ${filterBar()}
-    <div class="tablewrap"><table class="doors-table">
+    ${displayDoors.length ? `<div class="tablewrap"><table class="doors-table">
       <thead><tr><th><input type="checkbox" id="check-page" title="Select everyone on this page"></th><th>Person</th><th>Company</th><th>Match</th><th>Why</th><th>Draft</th><th></th></tr></thead>
       <tbody>${slice.map((d) => doorRow(d, queuedIds)).join("")}</tbody>
-    </table></div>
+    </table></div>` : `<div class="ghost">
+      <div class="ghost__icon">${I.plane}</div>
+      <h2>All visible doors are already in motion.</h2>
+      <p>Sent, replied, and meeting-booked contacts now live in Inbox and Tracker so this launch queue stays clean.</p>
+      <button class="btn btn--accent" id="dash-open-tracker">Open tracker</button>
+      <button class="btn btn--paper" id="dash-search-again">Search again</button>
+    </div>`}
     ${pager(displayDoors.length, page, "doors")}
     ${(meta.warnings || []).map((w) => `<p class="meta-warn">${esc(w)}</p>`).join("")}
   </div>`;
 
-  wireDoorsTable(slice, queuedIds);
+  if (displayDoors.length) wireDoorsTable(slice, queuedIds);
   wireFilterBar();
   wireSendStrip();
   $("#add-contact", view)?.addEventListener("click", openAddContact);
+  $("#dash-open-tracker", view)?.addEventListener("click", () => { location.hash = "tracker"; });
+  $("#dash-search-again", view)?.addEventListener("click", runSourcing);
 
   $$(".rowhead .pill", view).forEach((p) => p.addEventListener("click", () => {
     state.searchMode = p.dataset.mode;
@@ -1099,7 +1141,7 @@ function renderDoorsQueue() {
   });
   wireDoorsPager();
   /* user is close to the last loaded UI page: preload the next Apollo page */
-  if (page >= totalPages - 2) prefetchNextDoorsPage();
+  if (displayDoors.length && page >= totalPages - 2) prefetchNextDoorsPage();
   const pageCheck = $("#check-page", view);
   pageCheck?.addEventListener("change", () => {
     slice.forEach((d) => {
@@ -1135,10 +1177,19 @@ function wireDoorsTable(slice, queuedIds) {
    pipeline state actually changes, then it reappears with the news. */
 function stripSig() {
   const counts = {};
-  for (const m of state.messages) counts[m.status] = (counts[m.status] || 0) + 1;
+  for (const m of state.messages.filter(stripActionableMessages)) {
+    counts[m.status] = (counts[m.status] || 0) + 1;
+    if (m.unread) counts.unread = (counts.unread || 0) + 1;
+  }
   return Object.entries(counts).sort().map(([k, v]) => `${k}:${v}`).join("|");
 }
 const stripDismissed = () => load("knock_strip_dismissed", "") === stripSig();
+function stripActionableMessages(m) {
+  return Boolean(m?.unread || ["drafting", "sending", "queued", "paused", "waiting_gmail", "failed", "needs_review"].includes(m?.status));
+}
+function shouldShowSendStrip() {
+  return state.messages.some(stripActionableMessages);
+}
 function dismissSendStrip() {
   save("knock_strip_dismissed", stripSig());
   $("#send-strip", view)?.remove();
@@ -1149,22 +1200,29 @@ function sendStripHTML() {
 }
 
 function sendStripBody() {
-  const msgs = state.messages;
+  const msgs = state.messages.filter(stripActionableMessages);
   const total = msgs.length;
   const by = (...sts) => msgs.filter((m) => sts.includes(m.status)).length;
-  const delivered = by("sent", "followup_sent", "opened", "replied", "needs_review", "meeting");
-  const scheduled = by("scheduled");
+  const unread = msgs.filter((m) => m.unread).length;
   const inflight = by("drafting", "sending");
   const waiting = by("waiting_gmail");
   const failed = by("failed");
   const queuedN = by("queued", "paused");
-  const replies = by("replied", "needs_review");
-  const bar = total ? `<div class="sendstrip__bar"><i style="width:${Math.round(((delivered + scheduled) / total) * 100)}%"></i></div>` : "";
+  const review = by("needs_review");
+  const bar = total ? `<div class="sendstrip__bar"><i style="width:${Math.round((inflight / total) * 100)}%"></i></div>` : "";
+
+  if (review || unread) return `
+    <div class="qbanner__icn">${I.mail}</div>
+    <div>
+      <b>${review ? `${review} repl${review === 1 ? "y" : "ies"} ready for review` : `${unread} new repl${unread === 1 ? "y" : "ies"}`}</b>
+      <p>Open Inbox to review the warmest threads and keep the conversation moving.</p>
+    </div>
+    <a class="btn btn--paper btn--sm" href="#inbox">Open inbox</a>`;
 
   if (inflight || (sendRunActive && queuedN)) return `
     <div class="qbanner__icn qbanner__icn--live">${I.plane}</div>
     <div>
-      <b>Scout is sending · ${delivered + scheduled} of ${total} out the door</b>
+      <b>Scout is sending ${inflight || queuedN} knock${(inflight || queuedN) === 1 ? "" : "s"}</b>
       <p>${inflight ? "Drafting and sending live from your Gmail." : "Working through the queue."}${failed ? ` ${failed} failed, retry from the tracker.` : ""}</p>
       ${bar}
     </div>
@@ -1180,7 +1238,7 @@ function sendStripBody() {
     <div class="qbanner__icn">${I.bell}</div>
     <div>
       <b>${failed} knock${failed === 1 ? "" : "s"} failed to send</b>
-      <p>${delivered ? `${delivered} sent fine. ` : ""}Open the tracker to retry the ones that bounced.</p>
+      <p>Open the tracker to retry the ones that bounced.</p>
     </div>
     <a class="btn btn--paper btn--sm" href="#tracker">Open tracker</a>`;
   if (queuedN) return `
@@ -1190,19 +1248,11 @@ function sendStripBody() {
       <p>${state.knocks === 0 ? "You're out of knocks this month. Go Pro to keep sending." : "Paused or held. Resume them from the tracker and Scout sends right away."}</p>
     </div>
     ${state.knocks === 0 ? `<button class="btn btn--accent btn--sm" id="ss-upgrade">Go Pro</button>` : `<a class="btn btn--paper btn--sm" href="#tracker">Open tracker</a>`}`;
-  if (scheduled) return `
-    <div class="qbanner__icn">${I.cal}</div>
-    <div>
-      <b>${scheduled} knock${scheduled === 1 ? "" : "s"} scheduled</b>
-      <p>${delivered ? `${delivered} already sent. ` : ""}Gmail sends them at your chosen time; Scout tracks replies after.</p>
-      ${bar}
-    </div>
-    <a class="btn btn--paper btn--sm" href="#tracker">Open tracker</a>`;
   return `
     <div class="qbanner__icn">${I.mail}</div>
     <div>
-      <b>${delivered} knock${delivered === 1 ? "" : "s"} sent${replies ? ` · ${replies} repl${replies === 1 ? "y" : "ies"}` : ""}</b>
-      <p>Scout checks your inbox for replies every minute and drafts responses for you to review.</p>
+      <b>Knock is watching your active threads</b>
+      <p>Open the tracker for the full pipeline.</p>
     </div>
     <a class="btn btn--paper btn--sm" href="#tracker">Open tracker</a>`;
 }
@@ -1222,6 +1272,10 @@ function wireSendStrip() {
 
 function refreshSendStrip() {
   const strip = $("#send-strip", view);
+  if (!shouldShowSendStrip()) {
+    strip?.remove();
+    return;
+  }
   if (strip) {
     if (stripDismissed()) strip.remove();
     else strip.innerHTML = sendStripHTML();
@@ -1229,7 +1283,7 @@ function refreshSendStrip() {
   }
   /* dismissed earlier but the pipeline moved: bring the strip back with the news */
   const anchor = $(".statgrid", view);
-  if (anchor && state.messages.length && !stripDismissed()) {
+  if (anchor && shouldShowSendStrip() && !stripDismissed()) {
     const holder = document.createElement("div");
     holder.className = "qbanner";
     holder.id = "send-strip";
@@ -2052,6 +2106,10 @@ function summaryText(m) {
 }
 
 function updateMessageRow(m) {
+  if ((location.hash.replace("#", "") || "dashboard") === "dashboard" && doorIsActiveInPipeline(messageDoor(m))) {
+    renderDoorsQueue();
+    return;
+  }
   const row = $(`tr[data-msg-id="${m.id}"]`, view);
   if (row) {
     /* swap the whole row; click handling is delegated to the table */
@@ -2400,16 +2458,17 @@ function applyThreadRefresh(m, data) {
 
 async function refreshConversation(m, silent = false) {
   if (!m) {
-    if (!silent) toast("Select a thread first");
+    if (!silent) toast("Select a thread to refresh");
     return false;
   }
-  if (userId() === "dev") {
+  const realUserId = await realUserIdFromAuth();
+  if (!realUserId) {
     if (!silent) toast("Sign in with Google to refresh Gmail threads");
     return false;
   }
   const hasRefreshReference = Boolean(m.gmailThreadId || m.gmailMessageId || isRealUuid(m.id));
   if (!hasRefreshReference) {
-    if (!silent) toast(googleConnected() ? "This knock has not been sent through Gmail yet" : "Google is not connected");
+    if (!silent) toast(googleConnected() ? "This knock has not been sent through Gmail yet" : "Connect Google to refresh Gmail threads");
     return false;
   }
   try {
@@ -2417,22 +2476,25 @@ async function refreshConversation(m, silent = false) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        userId: userId(),
+        userId: realUserId,
         messageId: m.id,
-        gmailThreadId: m.gmailThreadId || "",
-        gmailMessageId: m.gmailMessageId || "",
-        toEmail: m.to || "",
+        gmailThreadId: m.gmailThreadId || m.gmail_thread_id || "",
+        gmailMessageId: m.gmailMessageId || m.gmail_message_id || "",
+        toEmail: m.to || m.toEmail || "",
         subject: m.subject || "",
       }),
     });
     const data = await res.json().catch(() => ({}));
+    if (data.error === "real_user_required") throw new Error(data.message || "Sign in with Google to refresh Gmail threads");
     if (res.status === 412 || data.error === "google_not_connected") throw new Error("Google is not connected");
-    if (data.error === "missing_thread_reference") throw new Error(data.message || "This thread is not tracked yet");
+    if (data.error === "missing_thread_reference") throw new Error(data.message || "This thread is not tracked by Gmail yet");
     if (data.error === "missing_gmail_thread_id") throw new Error("This knock has not been sent through Gmail yet");
     if (!res.ok || !data.ok) throw new Error(data.message || data.error || `Refresh failed (${res.status})`);
     applyThreadRefresh(m, data);
     saveLive();
-    if ((location.hash.replace("#", "") || "dashboard") === "inbox") renderInbox();
+    if ((location.hash.replace("#", "") || "dashboard") === "inbox") {
+      updateInboxThread(m, { forceBottom: !silent });
+    }
     if (!silent) toast("Conversation refreshed from Gmail");
     return true;
   } catch (err) {
@@ -2539,6 +2601,104 @@ function renderComposerChips(id) {
     inboxComposerAttachments.set(id, files.filter((a) => a.id !== b.dataset.id));
     renderComposerChips(id);
   }));
+}
+
+function inboxSnippet(m) {
+  const last = (m?.threadMessages || []).filter((t) => !t.isFromMe).slice(-1)[0];
+  return (threadBodyText(last) || m?.body || "").replace(/\s+/g, " ").slice(0, 80);
+}
+
+function threadMessagesHTML(m) {
+  const threadMessages = normalizeThreadMessages(m);
+  return `
+    ${threadMessages.map((tm) => `
+      <div class="msg ${tm.isFromMe ? "msg--you" : "msg--them"}">
+        <time>${esc(tm.isFromMe ? "You" : tm.from || "Them")} ${tm.date ? " - " + new Date(tm.date).toLocaleString() : ""}</time>
+        <div class="msg__body">${threadBodyHTML(tm)}</div>
+        ${attachmentChips(tm.attachments)}
+      </div>`).join("")}
+    ${m?.statusDetail === "Scout drafting response" && !m?.suggestedReply ? `<div class="msg msg--draft"><time>Scout</time><div class="msg__body">Scout is drafting a response...</div></div>` : ""}
+    ${m?.suggestedReply ? `<div class="msg msg--draft"><time>Scout draft</time><b>${esc(m.suggestedReply.subject || "")}</b><div class="msg__body">${esc(m.suggestedReply.body || "")}</div></div>` : ""}`;
+}
+
+function threadListItemHTML(m, selectedId = state.inboxSelectedId) {
+  return `<button class="thread-item ${selectedId === m.id ? "is-open" : ""} ${m.unread ? "is-new" : ""}" data-id="${m.id}">
+    <span class="thread-item__row">
+      ${m.unread ? '<i class="dot-unread"></i>' : ""}
+      <strong>${esc(m.name || m.toName || "Unknown")}</strong>
+      <time>${new Date(threadLastActivity(m) || Date.now()).toLocaleDateString([], { month: "short", day: "numeric" })}</time>
+    </span>
+    <span class="subj">${esc(m.subject || "quick question")}</span>
+    <span class="snippet">${esc(inboxSnippet(m))}</span>
+    ${threadTag(m)}
+  </button>`;
+}
+
+function wireThreadItemButton(b) {
+  b?.addEventListener("click", () => {
+    state.inboxSelectedId = b.dataset.id;
+    const m = msgById(b.dataset.id);
+    if (m?.unread) { m.unread = false; saveLive(); }
+    save("knock_inbox_selected", state.inboxSelectedId);
+    renderInbox();
+  });
+}
+
+function wireAttachmentPreviewButtons(root = view) {
+  $$(".attach-preview", root).forEach((b) => b.addEventListener("click", () => {
+    const att = attachmentPreviewStore.get(b.dataset.previewId);
+    if (att) openAttachmentPreview(att);
+  }));
+}
+
+function updateThreadListItem(m) {
+  const old = $$(".thread-item", view).find((b) => b.dataset.id === m.id);
+  if (!old) return false;
+  const holder = document.createElement("div");
+  holder.innerHTML = threadListItemHTML(m);
+  const next = holder.firstElementChild;
+  old.replaceWith(next);
+  wireThreadItemButton(next);
+  return true;
+}
+
+function renderThreadMessagesOnly(m, { forceBottom = false } = {}) {
+  const pane = $(".threadview__msgs", view);
+  if (!pane) return false;
+  const nearBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 48;
+  pane.innerHTML = threadMessagesHTML(m);
+  wireAttachmentPreviewButtons(pane);
+  if (forceBottom || nearBottom) pane.scrollTop = pane.scrollHeight;
+  return true;
+}
+
+function updateInboxThread(m, opts = {}) {
+  if ((location.hash.replace("#", "") || "dashboard") !== "inbox") return false;
+  if (!m || state.inboxSelectedId !== m.id || !inboxMatches(m)) {
+    renderInbox();
+    return false;
+  }
+  if (m.unread) m.unread = false;
+  const head = $(".threadview__head", view);
+  if (!head || !$(".threadview__msgs", view)) {
+    renderInbox();
+    return false;
+  }
+  $("h3", head).textContent = m.subject || "Select a thread";
+  $("small", head).textContent = `${m.name || ""}${m.company ? " - " + m.company : ""}${m.to ? " - " + m.to : ""}`;
+  $(".thread-flag", head).textContent = m.flagged ? "Unflag" : "Flag";
+  $(".thread-archive", head).textContent = m.archivedAt ? "Unarchive" : "Archive";
+  renderThreadMessagesOnly(m, opts);
+  const replyActions = $(".threadview__reply", view);
+  if (replyActions) {
+    replyActions.innerHTML = `
+      ${m.suggestedReply ? `<button class="btn btn--accent msg-reply" data-id="${m.id}">Review &amp; send Scout draft</button>` : ""}
+      <button class="btn btn--paper" id="open-tracker">Open tracker</button>`;
+    $(".msg-reply", replyActions)?.addEventListener("click", (e) => openSuggestedReply(msgById(e.target.dataset.id)));
+    $("#open-tracker", replyActions)?.addEventListener("click", () => { location.hash = "tracker"; });
+  }
+  updateThreadListItem(m);
+  return true;
 }
 
 function selectionInside(el) {
@@ -2663,7 +2823,7 @@ function wireReplyComposer(m) {
       });
       inboxComposerAttachments.delete(m.id);
       toast("Reply sent. Knock is watching the thread");
-      renderInbox();
+      updateInboxThread(m, { forceBottom: true });
     } catch (err) {
       btn.disabled = false; btn.textContent = "Send reply";
       toast(`Could not send: ${esc(err.message)}`);
@@ -2685,14 +2845,6 @@ function renderInbox() {
     save("knock_inbox_selected", selected.id);
   }
 
-  const threadMessages = normalizeThreadMessages(selected);
-
-  /* left-rail preview: their latest reply if any, else our outgoing copy */
-  const snippet = (m) => {
-    const last = (m.threadMessages || []).filter((t) => !t.isFromMe).slice(-1)[0];
-    return (last?.body || m.body || "").replace(/\s+/g, " ").slice(0, 80);
-  };
-
   view.innerHTML = `<div class="viewwrap">
     <div class="vh vh--row">
       <div>
@@ -2709,16 +2861,7 @@ function renderInbox() {
     <div class="inbox">
       <div class="threadlist">
         ${messages.map((m) => `
-          <button class="thread-item ${selected?.id === m.id ? "is-open" : ""} ${m.unread ? "is-new" : ""}" data-id="${m.id}">
-            <span class="thread-item__row">
-              ${m.unread ? '<i class="dot-unread"></i>' : ""}
-              <strong>${esc(m.name || m.toName || "Unknown")}</strong>
-              <time>${new Date(threadLastActivity(m) || Date.now()).toLocaleDateString([], { month: "short", day: "numeric" })}</time>
-            </span>
-            <span class="subj">${esc(m.subject || "quick question")}</span>
-            <span class="snippet">${esc(snippet(m))}</span>
-            ${threadTag(m)}
-          </button>`).join("")}
+          ${threadListItemHTML(m, selected?.id)}`).join("")}
       </div>
       <div class="threadview">
         <div class="threadview__head">
@@ -2734,14 +2877,7 @@ function renderInbox() {
           </div>
         </div>
         <div class="threadview__msgs">
-          ${threadMessages.map((tm) => `
-            <div class="msg ${tm.isFromMe ? "msg--you" : "msg--them"}">
-              <time>${esc(tm.isFromMe ? "You" : tm.from || "Them")} ${tm.date ? " - " + new Date(tm.date).toLocaleString() : ""}</time>
-              <div class="msg__body">${threadBodyHTML(tm)}</div>
-              ${attachmentChips(tm.attachments)}
-            </div>`).join("")}
-          ${selected?.statusDetail === "Scout drafting response" && !selected?.suggestedReply ? `<div class="msg msg--draft"><time>Scout</time><div class="msg__body">Scout is drafting a response...</div></div>` : ""}
-          ${selected?.suggestedReply ? `<div class="msg msg--draft"><time>Scout draft</time><b>${esc(selected.suggestedReply.subject || "")}</b><div class="msg__body">${esc(selected.suggestedReply.body || "")}</div></div>` : ""}
+          ${threadMessagesHTML(selected)}
         </div>
         <div class="threadview__reply">
           ${selected?.suggestedReply ? `<button class="btn btn--accent msg-reply" data-id="${selected.id}">Review &amp; send Scout draft</button>` : ""}
@@ -2780,23 +2916,22 @@ function renderInbox() {
     save("knock_inbox_filter", state.inboxFilter);
     renderInbox();
   }));
-  $$(".thread-item", view).forEach((b) => b.addEventListener("click", () => {
-    state.inboxSelectedId = b.dataset.id;
-    const m = msgById(b.dataset.id);
-    if (m?.unread) { m.unread = false; saveLive(); }
-    save("knock_inbox_selected", state.inboxSelectedId);
-    renderInbox();
-  }));
+  $$(".thread-item", view).forEach(wireThreadItemButton);
   /* opening the selected thread clears its unread highlight */
   if (selected?.unread) { selected.unread = false; saveLive(); }
   $(".msg-reply", view)?.addEventListener("click", (e) => openSuggestedReply(msgById(e.target.dataset.id)));
-  $$(".attach-preview", view).forEach((b) => b.addEventListener("click", () => {
-    const att = attachmentPreviewStore.get(b.dataset.previewId);
-    if (att) openAttachmentPreview(att);
-  }));
+  wireAttachmentPreviewButtons(view);
   $("#open-tracker", view)?.addEventListener("click", () => { location.hash = "tracker"; });
   $("#inbox-cta", view)?.addEventListener("click", () => { location.hash = "dashboard"; });
-  $(".thread-refresh", view)?.addEventListener("click", () => refreshConversation(selected));
+  $(".thread-refresh", view)?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    const old = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Refreshing...";
+    await refreshConversation(selected);
+    btn.disabled = false;
+    btn.textContent = old;
+  });
   $(".thread-flag", view)?.addEventListener("click", () => {
     selected.flagged = !selected.flagged;
     saveLive(); persistMessageOrg(selected); renderInbox();
@@ -3009,7 +3144,7 @@ function openSuggestedReply(m) {
       });
       closeModal();
       toast("Reply sent. Scout keeps watching the thread");
-      if ((location.hash.replace("#", "") || "dashboard") === "inbox") renderInbox();
+      if ((location.hash.replace("#", "") || "dashboard") === "inbox") updateInboxThread(m, { forceBottom: true });
     } catch (err) {
       btn.disabled = false; btn.textContent = "Send reply";
       toast(`Could not send: ${esc(err.message)}`);
@@ -3025,8 +3160,8 @@ let syncInFlight = false;
 
 async function runGmailSync() {
   if (syncInFlight) return;
-  const user = window.knockAuth?.user;
-  if (!user?.id || user.id === "dev") return; /* dev mode: nothing to sync */
+  const syncUserId = await realUserIdFromAuth();
+  if (!syncUserId) return; /* dev mode: nothing to sync */
   if (!googleConnected()) return;
   const hasSent = state.messages.some((m) => ["sent", "scheduled", "followup_sent", "opened", "replied", "needs_review", "meeting"].includes(m.status));
   if (!hasSent) return;
@@ -3035,7 +3170,7 @@ async function runGmailSync() {
     const res = await fetch("/api/gmail/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: user.id }),
+      body: JSON.stringify({ userId: syncUserId }),
     });
     const data = await res.json().catch(() => ({}));
     if (data.error === "google_not_connected") {
@@ -3045,6 +3180,7 @@ async function runGmailSync() {
     }
     if (!res.ok || !data.ok) return;
     let replies = 0;
+    let selectedUpdated = false;
     for (const u of data.updates || []) {
       const m = msgById(u.messageId);
       if (!m) continue;
@@ -3086,11 +3222,18 @@ async function runGmailSync() {
         ].slice(-20);
       }
       updateMessageRow(m);
+      if ((location.hash.replace("#", "") || "dashboard") === "inbox") {
+        if (state.inboxSelectedId === m.id) selectedUpdated = updateInboxThread(m) || selectedUpdated;
+        else updateThreadListItem(m);
+      }
     }
     if ((data.updates || []).length) {
       saveLive();
       updateChrome();
-      if ((location.hash.replace("#", "") || "dashboard") === "inbox") renderInbox();
+      if ((location.hash.replace("#", "") || "dashboard") === "inbox" && !selectedUpdated) {
+        const selected = msgById(state.inboxSelectedId);
+        if (!selected || !inboxMatches(selected)) renderInbox();
+      }
       if (replies) toast(`${replies} new repl${replies === 1 ? "y" : "ies"}. Scout drafted responses for review`);
     }
   } catch { /* offline; next tick will retry */ }
