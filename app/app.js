@@ -5152,7 +5152,7 @@ $("#acct-tour")?.addEventListener("click", () => { $("#acct-menu").hidden = true
     const user = await window.knockAuth?.ready;
     if (!user) {
       /* genuinely no session anywhere: back to the landing login */
-      location.replace("../index.html#login");
+      location.replace("/#login");
       return;
     }
     /* tidy the URL after a magic-link / OAuth redirect */
