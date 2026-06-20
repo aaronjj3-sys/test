@@ -3,6 +3,26 @@
   "buildCommand": "npm run build",
   "installCommand": "npm install",
   "outputDirectory": "public",
+  "headers": [
+    {
+      "source": "/app",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store, max-age=0, must-revalidate"
+        }
+      ]
+    },
+    {
+      "source": "/app/:path*",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store, max-age=0, must-revalidate"
+        }
+      ]
+    }
+  ],
   "crons": [
     {
       "path": "/api/cron/monitor",

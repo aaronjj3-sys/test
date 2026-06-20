@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,400..900;1,400..900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="app.css?v=20260613-unbreak" />
+  <link rel="stylesheet" href="app.css?v=20260620-polish-refresh" />
 </head>
 <body>
 
@@ -106,7 +106,41 @@
 
   <script src="../vendor/supabase.js"></script>
   <script src="config.js" onerror="void 0"></script>
-  <script src="auth.js?v=20260613-unbreak"></script>
-  <script src="app.js?v=20260613-unbreak"></script>
+  <script src="auth.js?v=20260620-polish-refresh"></script>
+  <script>
+    window.__knockBooted = false;
+    (function () {
+      function renderBootIssue(message) {
+        var view = document.getElementById("view");
+        if (!view || window.__knockBooted) return;
+        view.innerHTML = '<div class="viewwrap"><div class="ghost">' +
+          '<div class="ghost__icon"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.1 6.1L20 10l-5.9 1.9L12 18l-2.1-6.1L4 10l5.9-1.9z"/></svg></div>' +
+          '<h2>Knock hit a startup error.</h2>' +
+          '<p>' + String(message || "The app bundle did not finish loading.") + '</p>' +
+          '<button class="btn btn--accent" id="boot-reload">Reload app</button>' +
+          '<p class="connlist__fine">If this keeps showing, restart the dev server and hard refresh the browser.</p>' +
+          '</div></div>';
+        var btn = document.getElementById("boot-reload");
+        if (btn) btn.addEventListener("click", function () { location.reload(); });
+      }
+      window.__renderKnockBootIssue = renderBootIssue;
+      window.addEventListener("error", function (event) {
+        if (String(event.filename || "").includes("app.js")) {
+          renderBootIssue(event.message || "app.js failed to load.");
+        }
+      });
+      window.addEventListener("unhandledrejection", function (event) {
+        var reason = event.reason && (event.reason.message || event.reason);
+        renderBootIssue(reason || "Startup promise failed.");
+      });
+      setTimeout(function () {
+        var view = document.getElementById("view");
+        if (!window.__knockBooted && view && !view.innerHTML.trim()) {
+          renderBootIssue("The app did not start. Your browser may be using an old cached bundle.");
+        }
+      }, 2500);
+    })();
+  </script>
+  <script src="app.js?v=20260620-polish-refresh"></script>
 </body>
 </html>
