@@ -10,24 +10,30 @@ import { draftEmailPrompt, EMAIL_JSON_SCHEMA } from "../../lib/knock/prompts.js"
 import { generateDraftPreview } from "../../lib/knock/drafts.js";
 
 const PREVIEW_CHARS = 90;
-const MAX_SAMPLE_TOTAL_CHARS = 2400; // shared budget across editedSamples + writingSamples
+const MAX_SAMPLE_TOTAL_CHARS = 3600; // shared budget across editedSamples + writingSamples + voiceExamples
 const MAX_SAMPLES_EACH = 10;
 
 /** Whitelist the user's voice samples through to the prompt builders:
-    up to 10 strings per array (newest first), total chars capped. */
+    up to 10 entries per array (newest first), total body chars capped. */
 function capVoiceSamples(profile = {}) {
   let budget = MAX_SAMPLE_TOTAL_CHARS;
+  const textOf = (s) => typeof s === "string" ? s : s?.body || s?.text || s?.bodyPreview || "";
   const cap = (arr) => (Array.isArray(arr) ? arr : [])
-    .filter((s) => typeof s === "string" && s.trim())
+    .filter((s) => String(textOf(s) || "").trim())
     .slice(0, MAX_SAMPLES_EACH)
     .map((s) => {
       if (budget <= 0) return "";
-      const t = s.slice(0, budget);
+      const t = String(textOf(s)).slice(0, budget);
       budget -= t.length;
-      return t;
+      return typeof s === "string" ? t : { ...s, body: t };
     })
     .filter(Boolean);
-  return { editedSamples: cap(profile.editedSamples), writingSamples: cap(profile.writingSamples) };
+  return {
+    editedSamples: cap(profile.editedSamples),
+    voiceExamples: cap(profile.voiceExamples),
+    writingSamples: cap(profile.writingSamples),
+    writingSampleTexts: cap(profile.writingSampleTexts),
+  };
 }
 
 export default async function handler(req, res) {

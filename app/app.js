@@ -1305,7 +1305,7 @@ function openDoorDraft(d) {
     const subject = noEmDash($("#dd-subject").value.trim());
     if ((text && text !== d.draft?.body) || (subject && subject !== d.draft?.subject)) {
       /* the user rewrote the draft in their own words: learn from it */
-      if (text && d.draft?.body && text !== d.draft.body) captureEditedSample(text);
+      if (text) rememberEditedSample({ before: d.draft?.body || "", after: text, category: "cold_intro", subject });
       d.draft = { ...(d.draft || {}), subject: subject || d.draft?.subject, body: text || d.draft?.body };
       saveLive();
     }
@@ -1989,6 +1989,7 @@ async function processSingleSend(m) {
         ...(m.history || []),
         { at: new Date().toISOString(), type: data.status === "scheduled" ? "scheduled" : "sent", label: noEmDash(m.subject), body: noEmDash(m.body) },
       ].slice(-20);
+      rememberEditedSample({ before: d?.draft?.body || "", after: m.body, category: "cold_intro", subject: m.subject });
       state.knocks = Math.max(0, state.knocks - 1); /* knocks burn on send, not on queue */
       setMsgStatus(m, data.status === "scheduled" ? "scheduled" : "sent");
       updateChrome();
@@ -2363,6 +2364,12 @@ async function sendThreadReply(m, { subject, body, bodyHtml = "", attachments = 
   m.status = kind === "followup" ? "followup_sent" : (m.status === "meeting" ? "meeting" : "replied");
   m.replySent = true;
   if (kind === "followup") m.followupNumber = (m.followupNumber || 0) + 1;
+  rememberEditedSample({
+    before: m.suggestedReply?.body || "",
+    after: replyBody,
+    category: kind === "followup" ? "follow_up" : "reply",
+    subject: replySubject,
+  });
   delete m.suggestedReply;
   saveLive();
   updateMessageRow(m);
@@ -2853,25 +2860,56 @@ function saveProfile() {
 }
 
 /* ---- style learning from user edits ----
-   When the user meaningfully rewrites outgoing text, keep their final
-   version as a voice exemplar (newest first, max 10, deduped). Every 3rd
-   new sample re-runs style analysis so drafts drift toward how they
-   actually write. Persists with the profile (profile_json sync). */
-function captureEditedSample(text) {
-  const t = (text || "").trim();
-  if (!state.profile || t.length < 80) return;
-  const list = state.profile.editedSamples || [];
-  if (list.includes(t)) return;
-  state.profile.editedSamples = [t, ...list].slice(0, 10);
+   When the user meaningfully edits, approves, or sends outgoing text, keep
+   the final version as a voice exemplar. Edited Knock samples outrank Gmail
+   examples in prompts because they reflect what the user actually accepted. */
+function normalizeSampleText(text) {
+  return String(text || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function sampleWordCount(text) {
+  return (String(text || "").match(/[A-Za-z0-9']+/g) || []).length;
+}
+
+function rememberEditedSample({ before = "", after = "", category = "general", subject = "" } = {}) {
+  const finalText = noEmDash(String(after || "").trim());
+  if (!state.profile || finalText.length < 40 || sampleWordCount(finalText) < 8) return;
+  const finalKey = normalizeSampleText(finalText);
+  const beforeKey = normalizeSampleText(before);
+  const existing = [
+    ...(state.profile.editedSamples || []).map(normalizeSampleText),
+    ...(state.profile.voiceExamples || []).map((s) => normalizeSampleText(s?.body || s?.text || "")),
+  ];
+  if (existing.includes(finalKey)) return;
+
+  state.profile.editedSamples = [finalText, ...(state.profile.editedSamples || [])].slice(0, 20);
+  state.profile.voiceExamples = [
+    {
+      source: "knock_edit",
+      category,
+      subject: subject || "",
+      body: finalText.slice(0, 1600),
+      bodyPreview: finalText.replace(/\s+/g, " ").slice(0, 180),
+      wordCount: sampleWordCount(finalText),
+      edited: beforeKey && beforeKey !== finalKey,
+      date: new Date().toISOString(),
+    },
+    ...(state.profile.voiceExamples || []),
+  ].slice(0, 30);
   state.profile.editedSampleCount = (state.profile.editedSampleCount || 0) + 1;
   saveProfile();
   if (state.profile.editedSampleCount % 3 === 0) refreshStyleFromEdits();
 }
 
+function captureEditedSample(text) {
+  rememberEditedSample({ after: text });
+}
+
 async function refreshStyleFromEdits() {
   const p = state.profile;
   if (!p) return;
-  const samples = [...(p.editedSamples || []), ...(p.sampleTexts || [])].slice(0, 20);
+  const voiceBodies = (p.voiceExamples || []).map((s) => s?.body).filter(Boolean);
+  const samples = [...(p.editedSamples || []), ...voiceBodies, ...(p.writingSampleTexts || []), ...(p.sampleTexts || [])].slice(0, 20);
   if (!samples.length) return;
   try {
     const res = await fetch("/api/profile/analyze-style", {
@@ -2886,6 +2924,194 @@ async function refreshStyleFromEdits() {
       toast("Scout learned from your edits");
     }
   } catch { /* style learning is a bonus, never a blocker */ }
+}
+
+function formatShortDate(value) {
+  const d = value ? new Date(value) : null;
+  if (!d || Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function voiceToneSummary(style = {}) {
+  const bits = [];
+  if (style.formality || style.energy) bits.push(`Tone: ${[style.formality, style.energy].filter(Boolean).join("/")}`);
+  if (style.greetingStyle) bits.push(`Greeting: ${style.greetingStyle}`);
+  if (style.signoffStyle) bits.push(`Signoff: ${style.signoffStyle}`);
+  if (style.averageSentenceWords) bits.push(`Average length: ${Math.round(style.averageSentenceWords)} words`);
+  return bits;
+}
+
+function writingSampleLabel(sample) {
+  if (typeof sample === "string") return sample;
+  if (!sample || typeof sample !== "object") return "writing sample";
+  if (sample.source === "gmail_sent") return `${sample.category || "gmail"} · ${sample.subject || "sent email"}`;
+  return sample.subject || sample.category || "writing sample";
+}
+
+function voiceLearningCardHTML() {
+  const p = state.profile || {};
+  const learned = p.voiceLearning?.status === "ready";
+  const count = p.voiceLearning?.sampleCount || p.voiceLearning?.selectedCount || 0;
+  const learnedAt = formatShortDate(p.voiceLearning?.learnedAt);
+  const summary = voiceToneSummary(p.styleProfile || {});
+  return `
+    <div class="pcard voicelearn-card">
+      <h3>Voice learning</h3>
+      <p class="voicelearn-copy">Scout can learn how you write from your sent emails and edited Knock drafts.</p>
+      ${learned ? `
+        <div class="voicelearn-status">
+          <strong>Learned from ${count} sent email${count === 1 ? "" : "s"}</strong>
+          <small>${learnedAt ? `Last updated ${esc(learnedAt)}` : "Ready for future drafts"}</small>
+        </div>
+        ${summary.length ? `<div class="voicelearn-summary">${summary.map((s) => `<span>${esc(s)}</span>`).join("")}</div>` : ""}
+        <div class="voicelearn-actions">
+          <button class="btn btn--accent btn--sm" id="voice-learn">Relearn from Gmail</button>
+          <button class="btn btn--paper btn--sm" id="voice-review">Review samples</button>
+          <button class="btn btn--paper btn--sm" id="voice-reset">Reset voice</button>
+        </div>
+      ` : googleConnected() ? `
+        <div class="voicelearn-status">
+          <strong>Ready to learn</strong>
+          <small>Scans your sent mail only. You can review or reset this anytime.</small>
+        </div>
+        <button class="btn btn--accent btn--sm" id="voice-learn">Learn from Gmail</button>
+      ` : `
+        <div class="voicelearn-status">
+          <strong>Connect Google to learn from sent emails.</strong>
+          <small>Connect Google so Scout can learn from your sent emails.</small>
+        </div>
+        <button class="btn btn--sm" id="voice-connect">Connect Google</button>
+      `}
+      <p class="voicelearn-trust">Knock scans sent emails only. We use cleaned writing samples to learn style, not to train a public model. Scout never uses facts from old emails unless those facts are already in your profile or current thread.</p>
+    </div>`;
+}
+
+async function learnVoiceFromGmail() {
+  if (userId() === "dev") {
+    toast("Sign in with Google to learn your writing style.");
+    return;
+  }
+  if (!googleConnected()) {
+    connectGoogle();
+    return;
+  }
+  openModal(`
+    <h2>Learning your voice</h2>
+    <p class="sub">Scout is using your sent mail only.</p>
+    <div class="voicelearn-steps">
+      <span>Scanning sent emails...</span>
+      <span>Cleaning replies...</span>
+      <span>Learning your voice...</span>
+    </div>`, true);
+  try {
+    const res = await fetch("/api/gmail/learn-style", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: userId(), maxMessages: 100, months: 12, includeReplyPairs: true }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 412 || data.error === "google_not_connected") {
+      state.connections.google = false;
+      saveConnections();
+      throw new Error(data.message || "Connect Google first.");
+    }
+    if (!res.ok || !data.ok) throw new Error(data.message || "Scout could not learn from Gmail yet.");
+    await hydrateFromSupabase();
+    if (state.profile) {
+      state.profile.styleProfile = state.profile.styleProfile || data.styleProfile;
+      state.profile.voiceLearning = state.profile.voiceLearning || data.voiceLearning;
+      save("knock_profile", state.profile);
+    }
+    closeModal();
+    toast("Scout learned your writing style from Gmail.");
+    navigate();
+  } catch (err) {
+    closeModal();
+    toast(esc(err.message || "Scout could not learn from Gmail yet."));
+    navigate();
+  }
+}
+
+function learnedSamplesForReview() {
+  const p = state.profile || {};
+  const samples = [
+    ...(p.writingSamples || []).filter((s) => s && typeof s === "object" && s.source === "gmail_sent"),
+    ...(p.voiceExamples || []).filter((s) => s && typeof s === "object" && s.source === "gmail_sent"),
+  ];
+  const seen = new Set();
+  return samples.filter((s) => {
+    const key = s.gmailMessageId || `${s.subject}:${s.bodyPreview}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function openVoiceReview() {
+  const p = state.profile || {};
+  const summary = voiceToneSummary(p.styleProfile || {});
+  const groups = learnedSamplesForReview().reduce((acc, sample) => {
+    const key = sample.category || "general";
+    acc[key] = [...(acc[key] || []), sample];
+    return acc;
+  }, {});
+  const groupHtml = Object.entries(groups).map(([category, samples]) => `
+    <div class="voice-group">
+      <h4>${esc(category.replace(/_/g, " "))}</h4>
+      ${samples.slice(0, 6).map((s) => `
+        <div class="voice-sample">
+          <strong>${esc(s.subject || "Sent email")}</strong>
+          <small>${esc([s.wordCount ? `${s.wordCount} words` : "", formatShortDate(s.date)].filter(Boolean).join(" · "))}</small>
+          <p>${esc(s.bodyPreview || String(s.body || "").replace(/\s+/g, " ").slice(0, 220))}</p>
+        </div>`).join("")}
+    </div>`).join("");
+  openModal(`
+    <h2>Review learned voice</h2>
+    <p class="sub">Previews only. Scout stores selected cleaned samples, not raw Gmail threads.</p>
+    ${summary.length ? `<div class="voicelearn-summary voicelearn-summary--modal">${summary.map((s) => `<span>${esc(s)}</span>`).join("")}</div>` : ""}
+    ${groupHtml || `<p class="empty-line">No learned Gmail samples on this device yet.</p>`}
+    <div class="modal__actions">
+      <button class="btn btn--paper" id="voice-modal-reset">Reset voice</button>
+      <button class="btn btn--accent" id="m-close">Done</button>
+    </div>`);
+  $("#voice-modal-reset", modal).addEventListener("click", () => resetLearnedVoice(true));
+  $("#m-close", modal).addEventListener("click", closeModal);
+}
+
+function resetLearnedVoice(fromModal = false) {
+  if (!state.profile) return;
+  const doReset = () => {
+    state.profile.styleProfile = null;
+    state.profile.voiceLearning = null;
+    state.profile.voiceExamples = [];
+    state.profile.editedSamples = [];
+    state.profile.editedSampleCount = 0;
+    state.profile.writingSamples = (state.profile.writingSamples || [])
+      .filter((s) => !(s && typeof s === "object" && s.source === "gmail_sent"));
+    state.profile.writingSampleTexts = [];
+    state.profile.sampleTexts = [];
+    saveProfile();
+    closeModal();
+    toast("Learned voice reset");
+    navigate();
+  };
+  if (fromModal) return doReset();
+  openModal(`
+    <h2>Reset learned voice?</h2>
+    <p class="sub">This clears learned Gmail samples, edited-draft samples, and the current style profile. Your resume and profile stay put.</p>
+    <div class="modal__actions">
+      <button class="btn btn--ghost" id="m-cancel">Keep voice</button>
+      <button class="btn" id="m-reset">Reset voice</button>
+    </div>`);
+  $("#m-cancel").addEventListener("click", closeModal);
+  $("#m-reset").addEventListener("click", doReset);
+}
+
+function wireVoiceLearningCard() {
+  $("#voice-connect", view)?.addEventListener("click", connectGoogle);
+  $("#voice-learn", view)?.addEventListener("click", learnVoiceFromGmail);
+  $("#voice-review", view)?.addEventListener("click", openVoiceReview);
+  $("#voice-reset", view)?.addEventListener("click", () => resetLearnedVoice(false));
 }
 
 /* ---- durable profile persistence (Supabase `profiles` table) ----
@@ -3105,6 +3331,7 @@ function renderProfile() {
             <button class="edit" id="edit-voice">Edit</button>
           </div>
         </div>
+        ${voiceLearningCardHTML()}
         <div class="pcard">
           <h3>Resume <button class="edit" id="re-upload">Re-upload</button></h3>
           <div class="dropzone ${p.resumeFileName ? "is-filled" : ""}" id="resume-zone">
@@ -3155,7 +3382,7 @@ function renderProfile() {
           <p class="empty-line">Drop emails, essays, posts, or notes so Scout can write more like you.</p>
           <div class="dropzone ${samples.length ? "is-filled" : ""}" id="samples-zone">
             ${samples.length
-              ? `${icon("doc")} ${samples.length} sample${samples.length === 1 ? "" : "s"} saved<br><small>${samples.slice(0, samplesExpanded ? samples.length : 3).map(esc).join(" - ")}</small>`
+              ? `${icon("doc")} ${samples.length} sample${samples.length === 1 ? "" : "s"} saved<br><small>${samples.slice(0, samplesExpanded ? samples.length : 3).map((s) => esc(writingSampleLabel(s))).join(" - ")}</small>`
               : `${icon("doc")} Drop writing samples here<br><small>.txt, .md, .eml, .docx, or paste text</small>`}
           </div>
           <input type="file" id="samples-file" multiple accept=".pdf,.doc,.docx,.txt,.md,.eml" hidden>
@@ -3172,6 +3399,8 @@ function renderProfile() {
   </div>`;
 
   /* identity */
+  wireVoiceLearningCard();
+
   $("#edit-id", view).addEventListener("click", () => {
     openModal(`
       <h2>Your details</h2>
@@ -3511,6 +3740,7 @@ function renderSettings() {
           : "Mode, channel, and attachments for your knocks"}</small></div>
           <button class="btn btn--paper btn--sm end" id="set-sendprefs">Edit</button></div>
       </div>
+      ${voiceLearningCardHTML()}
       <div class="pcard" id="files-card">
         <h3>Attachments</h3>
         <div id="files-list"><div class="setrow"><span class="ico">${I.doc}</span><div><strong>Loading…</strong><small>Fetching your saved files</small></div></div></div>
@@ -3556,6 +3786,7 @@ function renderSettings() {
   $("#set-sendprefs", view).addEventListener("click", () => openSendPrefs(renderSettings));
   $("#set-feedback", view).addEventListener("click", openFeedback);
   $("#set-connections", view).addEventListener("click", openConnections);
+  wireVoiceLearningCard();
   $("#pro-redeem", view)?.addEventListener("click", redeemProCode);
   $("#set-logout", view).addEventListener("click", () => window.knockAuth.signOut());
   $("#set-reset", view).addEventListener("click", () => {

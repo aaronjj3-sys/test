@@ -6,6 +6,7 @@ import { rankDoors } from "../lib/apollo/scoring.js";
 import { normalizePerson, buildPeopleSearchFilters, buildScoringProfile } from "../lib/apollo/sourcing.js";
 import { mockSourcing } from "../lib/knock/mock.js";
 import { BULK_ENRICH_BATCH_SIZE, SEARCH_MODES } from "../lib/knock/constants.js";
+import { cleanEmailBody, classifySample, isUsefulWritingSample } from "../lib/gmail/cleanEmail.js";
 
 const profile = {
   story: "Built a $400K wholesale/ecommerce business in high school and wants founder mentorship",
@@ -209,5 +210,20 @@ assert.equal(np.organizationFoundedYear, 2022);
 assert.equal(np.organizationSize, 40);
 
 /* 14. key health (informational only) */
+const cleaned = cleanEmailBody(`Hey Maya,
+
+Thanks again for making time next week. Tuesday at 2 works well for me, and I can send over a short agenda beforehand so we make good use of the time.
+
+Best,
+Aaron
+
+On Fri, Jun 19, 2026 at 9:12 AM Maya wrote:
+> old chain here`);
+assert.ok(!/old chain/i.test(cleaned), "cleanEmailBody must strip quoted Gmail chains");
+assert.ok(/Tuesday at 2 works/.test(cleaned), "cleanEmailBody must keep the user's new writing");
+assert.equal(classifySample({ subject: "Coffee next week" }, cleaned), "scheduling", "scheduling samples should classify deterministically");
+assert.equal(isUsefulWritingSample(cleaned, { subject: "Coffee next week", from: "aaron@example.com", to: "maya@example.com" }), true,
+  "cleaned sent mail should be accepted as a useful sample");
+
 console.log(`APOLLO_API_KEY: ${process.env.APOLLO_API_KEY ? "present" : "absent (mock mode)"}`);
 console.log("All sourcing tests passed ✓");
