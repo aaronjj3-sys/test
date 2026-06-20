@@ -21,12 +21,14 @@ const requiredFiles = [
 
 const apiRoutes = [
   "api/apollo/usage.js",
+  "api/billing/redeem-code.js",
   "api/campaigns/create.js",
   "api/connections/disconnect.js",
   "api/connections/status.js",
   "api/cron/monitor.js",
   "api/dashboard/doors.js",
   "api/files.js",
+  "api/gmail/attachment.js",
   "api/gmail/import-thread.js",
   "api/gmail/send.js",
   "api/gmail/sync.js",

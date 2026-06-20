@@ -3,7 +3,7 @@
    via PRO_ACCESS_CODES as a comma-separated list. Codes containing UNLIMITED
    unlock the unlimited test plan; other accepted codes unlock pro. */
 
-import { sbUpdate, supabaseConfigured } from "../../lib/supabase/admin.js";
+import { sbUpsert, supabaseConfigured } from "../../lib/supabase/admin.js";
 
 const DEFAULT_TEST_CODES = ["KNOCK-PRO-TEST", "AARON-PRO", "SCOUT-PRO", "KNOCK-UNLIMITED-TEST"];
 
@@ -28,10 +28,11 @@ export default async function handler(req, res) {
 
   const plan = /UNLIMITED/.test(code) ? "unlimited" : "pro";
   if (validUuid(userId) && supabaseConfigured()) {
-    const updated = await sbUpdate("profiles", { user_id: userId }, {
+    const updated = await sbUpsert("profiles", {
+      user_id: userId,
       plan,
       updated_at: new Date().toISOString(),
-    });
+    }, "user_id");
     if (!updated) return res.status(502).json({ ok: false, error: "Could not update the account plan" });
   }
 
