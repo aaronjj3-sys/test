@@ -10,7 +10,7 @@ alter table public.campaign_messages
 comment on column public.campaign_messages.archived_at is
   'Knock-level archive timestamp. Does not archive the Gmail thread.';
 comment on column public.campaign_messages.deleted_at is
-  'Knock-level hidden/deleted timestamp. Does not delete from Gmail.';
+  'Legacy Knock-level deletion timestamp. Does not delete from Gmail.';
 comment on column public.campaign_messages.flagged is
   'Knock-level flag/star for inbox organization.';
 comment on column public.campaign_messages.last_reply_at is

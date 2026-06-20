@@ -1,13 +1,18 @@
 /* POST /api/gmail/refresh-thread
-   Body: { userId, messageId }
-   Force-pulls the full Gmail thread for one Knock campaign message and
-   returns normalized messages for the in-app Inbox. */
+   Body: { userId, messageId?, gmailThreadId?, gmailMessageId?, toEmail?, subject? }
+   Force-pulls the full Gmail thread for one Knock conversation. The thread can
+   be identified by a persisted campaign_messages row or by a Gmail thread id
+   for older/local-only app_state messages. */
 
 import { sbSelect, sbUpdate, supabaseConfigured } from "../../lib/supabase/admin.js";
 import { getThread } from "../../lib/gmail/client.js";
 
 function validUuid(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i.test(value || "");
+}
+
+function clean(value) {
+  return String(value || "").trim();
 }
 
 function latestInbound(thread = []) {
@@ -20,10 +25,40 @@ function newestIsInbound(thread = []) {
 }
 
 function statusSuggestion(row, thread) {
-  if (row.status === "meeting") return "meeting";
-  if (!newestIsInbound(thread)) return row.status || "sent";
-  if (row.suggested_reply) return "needs_review";
+  if (row?.status === "meeting") return "meeting";
+  if (!newestIsInbound(thread)) return row?.status || "sent";
+  if (row?.suggested_reply) return "needs_review";
   return "replied";
+}
+
+function normalizeThread(thread = []) {
+  return thread.map((m) => ({
+    id: m.id,
+    from: m.from,
+    to: m.to,
+    date: m.date,
+    body: m.body,
+    subject: m.subject,
+    isFromMe: Boolean(m.isFromMe),
+    attachments: m.attachments || [],
+  }));
+}
+
+async function findRow(userId, { messageId, gmailThreadId, gmailMessageId }) {
+  const attempts = [];
+  if (validUuid(messageId)) attempts.push({ id: messageId, user_id: userId });
+  if (gmailThreadId) attempts.push({ gmail_thread_id: gmailThreadId, user_id: userId });
+  if (gmailMessageId) attempts.push({ gmail_message_id: gmailMessageId, user_id: userId });
+
+  for (const filter of attempts) {
+    const rows = await sbSelect("campaign_messages", {
+      filter,
+      limit: 1,
+      select: "*",
+    });
+    if (rows?.[0]) return rows[0];
+  }
+  return null;
 }
 
 async function updateThreadState(userId, row, patch) {
@@ -40,59 +75,73 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ ok: false, error: "POST only" });
   if (!supabaseConfigured()) return res.status(503).json({ ok: false, error: "supabase_not_configured" });
 
-  const { userId, messageId } = req.body || {};
-  if (!validUuid(userId) || !validUuid(messageId)) {
-    return res.status(400).json({ ok: false, error: "A real userId and messageId are required" });
+  const body = req.body || {};
+  const userId = clean(body.userId);
+  const messageId = clean(body.messageId);
+  const gmailThreadId = clean(body.gmailThreadId);
+  const gmailMessageId = clean(body.gmailMessageId);
+  const toEmail = clean(body.toEmail);
+  const subject = clean(body.subject);
+
+  if (!validUuid(userId)) {
+    return res.status(400).json({
+      ok: false,
+      error: "real_user_required",
+      message: "Sign in to Knock first.",
+    });
   }
 
-  const rows = await sbSelect("campaign_messages", {
-    filter: { id: messageId, user_id: userId },
-    limit: 1,
-    select: "*",
-  });
-  const row = rows?.[0];
-  if (!row) return res.status(404).json({ ok: false, error: "message_not_found" });
-  if (!row.gmail_thread_id) return res.status(409).json({ ok: false, error: "missing_gmail_thread_id", message: "This message has not been sent through Gmail yet." });
+  const row = await findRow(userId, { messageId, gmailThreadId, gmailMessageId });
+  const threadId = row?.gmail_thread_id || gmailThreadId;
+  if (!threadId) {
+    return res.status(409).json({
+      ok: false,
+      error: "missing_thread_reference",
+      message: "This thread is not tracked by Gmail yet.",
+    });
+  }
 
   try {
-    const thread = await getThread(userId, row.gmail_thread_id);
+    const thread = await getThread(userId, threadId);
     const inbound = latestInbound(thread);
     const nowIso = new Date().toISOString();
     const suggestion = statusSuggestion(row, thread);
-    await updateThreadState(userId, row, {
-      status: suggestion,
-      last_reply_at: inbound?.date || row.last_reply_at || null,
-      last_synced_at: nowIso,
-      updated_at: nowIso,
-    });
+    const threadMessages = normalizeThread(thread);
+    const latest = threadMessages[threadMessages.length - 1] || null;
+    const attachments = threadMessages.flatMap((m) =>
+      (m.attachments || []).map((a) => ({ ...a, messageId: a.messageId || m.id }))
+    );
 
-    const threadMessages = thread.map((m) => ({
-      id: m.id,
-      from: m.from,
-      to: m.to,
-      date: m.date,
-      body: m.body,
-      subject: m.subject,
-      isFromMe: Boolean(m.isFromMe),
-      attachments: m.attachments || [],
-    }));
-    const attachments = threadMessages.flatMap((m) => (m.attachments || []).map((a) => ({ ...a, messageId: m.id })));
+    if (row) {
+      await updateThreadState(userId, row, {
+        status: suggestion,
+        last_reply_at: inbound?.date || row.last_reply_at || null,
+        last_synced_at: nowIso,
+        updated_at: nowIso,
+      });
+    }
 
     return res.status(200).json({
       ok: true,
-      gmailThreadId: row.gmail_thread_id,
-      gmailMessageId: row.gmail_message_id || null,
+      messageId: row?.id || messageId || null,
+      gmailThreadId: threadId,
+      gmailMessageId: row?.gmail_message_id || gmailMessageId || latest?.id || null,
+      toEmail: row?.to_email || toEmail || null,
+      subject: row?.subject || subject || latest?.subject || null,
       threadMessages,
       lastReplyAt: inbound?.date || null,
+      latestThreadMessageId: latest?.id || null,
+      latestThreadMessageAt: latest?.date || null,
       attachments,
       statusSuggestion: suggestion,
-      archivedAt: row.archived_at || null,
-      deletedAt: row.deleted_at || null,
-      flagged: Boolean(row.flagged),
+      archivedAt: row?.archived_at || null,
+      deletedAt: row?.deleted_at || null,
+      flagged: Boolean(row?.flagged),
+      dbTracked: Boolean(row),
     });
   } catch (err) {
     if (err.message === "google_not_connected") {
-      return res.status(412).json({ ok: false, error: "google_not_connected" });
+      return res.status(412).json({ ok: false, error: "google_not_connected", message: "Connect Google to refresh Gmail threads." });
     }
     console.error("Thread refresh failed:", err.message);
     return res.status(502).json({ ok: false, error: err.message || "refresh_failed" });

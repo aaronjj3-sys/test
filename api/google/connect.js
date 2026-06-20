@@ -21,6 +21,24 @@ function redirect(res, location) {
   res.end();
 }
 
+function validUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value || "");
+}
+
+function safeReturnTo(value) {
+  return value && value.startsWith("/app") ? value : "/app/index.html#settings";
+}
+
+function returnWithParam(returnTo, key, value) {
+  const url = new URL(safeReturnTo(returnTo), "https://knock.local");
+  url.searchParams.set(key, value);
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function wantsJson(req) {
+  return /\bapplication\/json\b/i.test(req.headers.accept || "");
+}
+
 export default async function handler(req, res) {
   if (req.method !== "GET") return res.status(405).json({ error: "GET only" });
 
@@ -30,10 +48,16 @@ export default async function handler(req, res) {
   const url = new URL(req.url, requestOrigin(req));
   const userId = url.searchParams.get("user_id");
   const userEmail = url.searchParams.get("user_email") || "";
-  const returnTo = url.searchParams.get("return_to") || "/app/index.html#settings";
+  const returnTo = safeReturnTo(url.searchParams.get("return_to"));
 
-  if (!userId || userId === "dev") {
-    return res.status(400).json({ error: "Connect Google requires a real Supabase user session" });
+  if (!validUuid(userId)) {
+    const payload = {
+      ok: false,
+      error: "real_user_required",
+      message: "Sign in to Knock before connecting Google.",
+    };
+    if (wantsJson(req)) return res.status(400).json(payload);
+    return redirect(res, returnWithParam(returnTo, "google_error", "real_user_required"));
   }
 
   const redirectUri = process.env.GOOGLE_REDIRECT_URI || `${requestOrigin(req)}/api/google/callback`;

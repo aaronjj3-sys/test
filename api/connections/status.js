@@ -1,4 +1,5 @@
 /* GET /api/connections/status?user_id=...
+   POST /api/connections/status { userId }
    Source of truth for what's actually connected: reads oauth_connections in
    Supabase (service role, server-side only) and reports per-provider status.
    The client syncs its local state from this on boot so the UI always
@@ -9,17 +10,19 @@ function validUuid(value) {
 }
 
 export default async function handler(req, res) {
-  if (req.method !== "GET") return res.status(405).json({ error: "GET only" });
+  if (!["GET", "POST"].includes(req.method)) return res.status(405).json({ error: "GET or POST only" });
 
   const url = new URL(req.url, "http://localhost");
-  const userId = url.searchParams.get("user_id");
+  const userId = req.method === "POST"
+    ? (req.body?.userId || req.body?.user_id || "")
+    : (url.searchParams.get("user_id") || url.searchParams.get("userId") || "");
 
   const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.DB_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY;
 
   if (!validUuid(userId) || !supabaseUrl || !serviceRoleKey) {
     /* dev mode or no real session: nothing connected server-side */
-    return res.status(200).json({ ok: true, connections: {}, persisted: false });
+    return res.status(200).json({ ok: true, connections: {}, google: false, persisted: false });
   }
 
   try {
@@ -37,9 +40,9 @@ export default async function handler(req, res) {
     for (const row of rows) {
       connections[row.provider] = { connected: true, email: row.provider_email || "", updatedAt: row.updated_at };
     }
-    return res.status(200).json({ ok: true, connections, persisted: true });
+    return res.status(200).json({ ok: true, connections, google: Boolean(connections.google), persisted: true });
   } catch (err) {
     console.error("Connections status failed:", err.message);
-    return res.status(200).json({ ok: false, connections: {}, persisted: false });
+    return res.status(200).json({ ok: false, connections: {}, google: false, persisted: false });
   }
 }

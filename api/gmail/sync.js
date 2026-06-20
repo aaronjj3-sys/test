@@ -12,7 +12,13 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
   const { userId } = req.body || {};
-  if (!validUuid(userId)) return res.status(400).json({ error: "A real Supabase userId is required" });
+  if (!validUuid(userId)) {
+    return res.status(400).json({
+      ok: false,
+      error: "real_user_required",
+      message: "Sign in to Knock first.",
+    });
+  }
 
   try {
     const result = await syncUser(userId);

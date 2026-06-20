@@ -21,12 +21,15 @@ const requiredFiles = [
 
 const apiRoutes = [
   "api/apollo/usage.js",
+  "api/billing/redeem-code.js",
   "api/campaigns/create.js",
+  "api/config.js",
   "api/connections/disconnect.js",
   "api/connections/status.js",
   "api/cron/monitor.js",
   "api/dashboard/doors.js",
   "api/files.js",
+  "api/gmail/attachment.js",
   "api/gmail/import-thread.js",
   "api/gmail/learn-style.js",
   "api/gmail/send.js",
@@ -106,6 +109,13 @@ if (supabaseUrl && supabaseAnonKey) {
     path.join(appOutDir, "config.js"),
     `window.KNOCK_CONFIG = {\n  supabaseUrl: ${JSON.stringify(supabaseUrl)},\n  supabaseAnonKey: ${JSON.stringify(supabaseAnonKey)},\n};\n`,
   );
+} else {
+  const message = "Warning: Supabase browser config missing. Production Google/Supabase auth will not work.";
+  if (process.env.REQUIRE_SUPABASE_CONFIG === "1") {
+    console.error(message);
+    process.exit(1);
+  }
+  console.warn(message);
 }
 
 for (const dir of optionalStaticDirs) {

@@ -11,13 +11,20 @@
 
 (function () {
   const cfg = window.KNOCK_CONFIG;
-  const hasSupabase = cfg && cfg.supabaseUrl && !cfg.supabaseUrl.includes("YOUR-PROJECT") && window.supabase;
+  const isLocal = ["localhost", "127.0.0.1"].includes(location.hostname);
+  const allowDevMode = isLocal || localStorage.getItem("knock_allow_dev_mode") === "1";
+  const hasSupabase = Boolean(
+    cfg?.supabaseUrl &&
+    cfg?.supabaseAnonKey &&
+    !cfg.supabaseUrl.includes("YOUR-PROJECT") &&
+    window.supabase
+  );
   const inApp = /\/app\//.test(location.pathname);
   const appUrl = inApp ? location.href.split("#")[0] : new URL("app/index.html", location.href).href;
   const landingUrl = inApp ? "../index.html" : "index.html";
 
   const auth = (window.knockAuth = {
-    mode: hasSupabase ? "supabase" : "dev",
+    mode: hasSupabase ? "supabase" : allowDevMode ? "dev" : "misconfigured",
     user: null,
     client: null,
     ready: null,
@@ -31,6 +38,7 @@
 
   auth.signOut = async () => {
     localStorage.removeItem("knock_dev_session");
+    localStorage.removeItem("knock_active_user_id");
     if (auth.client) await auth.client.auth.signOut();
     location.href = landingUrl;
   };
@@ -57,7 +65,7 @@
       const { data: { session } } = await auth.client.auth.getSession();
       if (session) auth.user = fromSession(session);
     }
-    if (!auth.user) auth.user = devUser();
+    if (!auth.user && auth.mode === "dev") auth.user = devUser();
     return auth.user;
   })();
 
@@ -81,9 +89,10 @@
         <form id="auth-email">
           <input type="email" placeholder="you@school.edu" required />
           <button class="authbtn authbtn--accent" type="submit">Email me a magic link</button>
-        </form>` : `
+        </form>` : auth.mode === "dev" ? `
         <button class="authbtn authbtn--accent" id="auth-dev">Continue with dev login</button>
-        <p class="authgate__note">Supabase is not configured, so Google sign-in and magic links are off. Set the Supabase env vars and restart the dev server to turn them on.</p>`}
+        <p class="authgate__note">Supabase is not configured, so Google sign-in and magic links are off. Set the Supabase env vars and restart the dev server to turn them on.</p>` : `
+        <p class="authgate__note">Supabase browser config is missing on this deployment. Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY, then redeploy.</p>`}
         <p class="authgate__note" id="auth-note"></p>
         <p class="authgate__fine">By continuing you agree to Knock's <a href="${inApp ? "../" : ""}terms.html">Terms</a> and <a href="${inApp ? "../" : ""}privacy.html">Privacy Policy</a>.</p>
       </div>`;

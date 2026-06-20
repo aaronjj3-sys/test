@@ -189,7 +189,7 @@ export default async function handler(req, res) {
     return res.status(400).json({
       ok: false,
       error: "real_user_required",
-      message: "Sign in with Google to learn your writing style.",
+      message: "Sign in to Knock first.",
     });
   }
   if (!supabaseConfigured()) {
