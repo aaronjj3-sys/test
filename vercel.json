@@ -29,11 +29,14 @@
       "schedule": "0 15 * * *"
     }
   ],
-  "rewrites": [
+  "redirects": [
     {
       "source": "/app",
-      "destination": "/app/index.html"
-    },
+      "destination": "/app/",
+      "permanent": false
+    }
+  ],
+  "rewrites": [
     {
       "source": "/app/",
       "destination": "/app/index.html"

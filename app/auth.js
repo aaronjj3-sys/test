@@ -19,9 +19,9 @@
     !cfg.supabaseUrl.includes("YOUR-PROJECT") &&
     window.supabase
   );
-  const inApp = /\/app\//.test(location.pathname);
-  const appUrl = inApp ? location.href.split("#")[0] : new URL("app/index.html", location.href).href;
-  const landingUrl = inApp ? "../index.html" : "index.html";
+  const inApp = /^\/app(?:\/|$)/.test(location.pathname);
+  const appUrl = `${location.origin}/app/`;
+  const landingUrl = `${location.origin}/`;
 
   const auth = (window.knockAuth = {
     mode: hasSupabase ? "supabase" : allowDevMode ? "dev" : "misconfigured",
@@ -94,7 +94,7 @@
         <p class="authgate__note">Supabase is not configured, so Google sign-in and magic links are off. Set the Supabase env vars and restart the dev server to turn them on.</p>` : `
         <p class="authgate__note">Supabase browser config is missing on this deployment. Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY, then redeploy.</p>`}
         <p class="authgate__note" id="auth-note"></p>
-        <p class="authgate__fine">By continuing you agree to Knock's <a href="${inApp ? "../" : ""}terms.html">Terms</a> and <a href="${inApp ? "../" : ""}privacy.html">Privacy Policy</a>.</p>
+        <p class="authgate__fine">By continuing you agree to Knock's <a href="/terms.html">Terms</a> and <a href="/privacy.html">Privacy Policy</a>.</p>
       </div>`;
     document.body.appendChild(el);
 

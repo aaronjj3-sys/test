@@ -62,6 +62,12 @@ async function handleApi(req, res, pathname) {
 const server = http.createServer(async (req, res) => {
   const { pathname } = new URL(req.url, `http://localhost:${PORT}`);
 
+  if (pathname === "/app") {
+    res.statusCode = 302;
+    res.setHeader("Location", "/app/");
+    return res.end();
+  }
+
   if (pathname === "/app/config.js") {
     const config = browserConfig();
     if (!config) { res.statusCode = 404; return res.end("Supabase browser config is not set"); }
