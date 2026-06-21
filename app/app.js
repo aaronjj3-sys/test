@@ -612,16 +612,28 @@ function saveConnections() {
   save("knock_connections", state.connections);
 }
 
+let connectionUiRefreshing = false;
+
 function renderSettingsIfCurrent() {
   if ((location.hash.replace("#", "") || "dashboard") === "settings") renderSettings();
 }
 
 function refreshVisibleConnectionUI() {
+  if (connectionUiRefreshing) return;
+  connectionUiRefreshing = true;
+  try {
+    refreshSendStrip();
+    updateChrome();
+    const line = $("#auth-status-line", view);
+    if (line) line.textContent = authDiagnosticText();
+  } finally {
+    connectionUiRefreshing = false;
+  }
+}
+
+function refreshConnectionChrome() {
+  refreshVisibleConnectionUI();
   renderSettingsIfCurrent();
-  refreshSendStrip();
-  updateChrome();
-  const route = location.hash.replace("#", "") || "dashboard";
-  if (["inbox", "dashboard", "tracker", "settings"].includes(route)) navigate();
 }
 
 const GOOGLE_CONNECT_ERRORS = {
@@ -655,7 +667,7 @@ async function connectGoogle() {
     sessionStorage.removeItem("knock_after_login");
     toast("Google is already connected.");
     releaseWaitingGmailMessages();
-    refreshVisibleConnectionUI();
+    refreshConnectionChrome();
     return;
   }
 
@@ -693,7 +705,7 @@ async function handleAfterLoginAction() {
 
     if (status?.google || state.connections?.google) {
       toast("Google is already connected.");
-      refreshVisibleConnectionUI();
+      refreshConnectionChrome();
       return;
     }
 
@@ -717,18 +729,15 @@ async function handleConnectReturn() {
   }
 
   await getLiveAuthUser();
-  const status = await refreshConnectionStatus({ silent: true, rerender: true });
+  const status = await refreshConnectionStatus({ silent: true, rerender: false });
 
   if (googleConnectedParam || status?.google) {
     state.connections.google = true;
     saveConnections();
-    const pendingVoice = sessionStorage.getItem("knock_after_google_connect");
-    if (pendingVoice === "learn_voice") {
-      sessionStorage.removeItem("knock_after_google_connect");
-    }
+    sessionStorage.removeItem("knock_after_google_connect");
     releaseWaitingGmailMessages();
     toast("Google connected.");
-    refreshVisibleConnectionUI();
+    refreshConnectionChrome();
   }
 
   history.replaceState(null, "", `${location.pathname}${location.hash || "#settings"}`);
@@ -758,7 +767,6 @@ async function refreshConnectionStatus({ silent = true, rerender = false } = {})
     const changed = Boolean(state.connections.google);
     state.connections.google = false;
     saveConnections();
-    if (rerender) refreshVisibleConnectionUI();
     return { ok: false, google: false, reason: "not_signed_in", changed };
   }
 
@@ -782,7 +790,6 @@ async function refreshConnectionStatus({ silent = true, rerender = false } = {})
 
     const changed = before !== google;
     if (google) releaseWaitingGmailMessages();
-    if (rerender || changed) refreshVisibleConnectionUI();
 
     return { ok: true, google, raw: data, changed };
   } catch {
@@ -795,10 +802,10 @@ async function recheckConnectionStatus() {
   console.log("[action]", "recheck-connection");
   try {
     await getLiveAuthUser();
-    const status = await refreshConnectionStatus({ silent: false, rerender: true });
+    const status = await refreshConnectionStatus({ silent: false, rerender: false });
+    refreshConnectionChrome();
     if (status?.ok) toast("Connection status refreshed");
     else toast("Could not refresh connection status");
-    renderSettings();
   } catch {
     toast("Could not refresh connection status");
   }
@@ -4617,7 +4624,7 @@ function renderSettings() {
 
   if (!settingsConnectionRefreshInFlight) {
     settingsConnectionRefreshInFlight = true;
-    refreshConnectionStatus({ silent: true, rerender: true }).then(() => {
+    refreshConnectionStatus({ silent: true, rerender: false }).then(() => {
       settingsConnectionRefreshInFlight = false;
       const line = $("#auth-status-line", view);
       if (line) line.textContent = authDiagnosticText();
@@ -5441,7 +5448,9 @@ $("#acct-tour")?.addEventListener("click", () => { $("#acct-menu").hidden = true
     await handleAfterLoginAction();
     initAccount();
     navigate();
-    await refreshConnectionStatus({ silent: true, rerender: true });
+    await refreshConnectionStatus({ silent: true, rerender: false });
+    refreshSendStrip();
+    updateChrome();
     refreshApolloUsage();
     if (!state.profile) openOnboarding(1);
 
