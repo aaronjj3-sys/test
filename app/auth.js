@@ -19,9 +19,9 @@
     !cfg.supabaseUrl.includes("YOUR-PROJECT") &&
     window.supabase
   );
-  const inApp = /^\/app\/?/.test(location.pathname);
-  const appUrl = new URL("/app/", location.origin).href;
-  const landingUrl = "/";
+  const inApp = /^\/app(?:\/|$)/.test(location.pathname);
+  const appUrl = `${location.origin}/app/`;
+  const landingUrl = `${location.origin}/`;
 
   const auth = (window.knockAuth = {
     mode: hasSupabase ? "supabase" : allowDevMode ? "dev" : "misconfigured",

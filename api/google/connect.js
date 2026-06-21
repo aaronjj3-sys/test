@@ -1,3 +1,8 @@
+/* Start Gmail/Calendar OAuth for a signed-in Supabase user.
+   Production should set GOOGLE_REDIRECT_URI to the stable app origin, e.g.
+   https://knock-nu.vercel.app/api/google/callback. Preview deployments need
+   that preview callback added to Google Cloud or use the production callback
+   and test Google connect on the production domain. */
 const SCOPES = [
   "openid",
   "email",

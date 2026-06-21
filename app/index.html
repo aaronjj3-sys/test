@@ -126,18 +126,25 @@
       }
       window.__renderKnockBootIssue = renderBootIssue;
       window.addEventListener("error", function (event) {
-        if (String(event.filename || "").includes("app.js")) {
-          renderBootIssue(event.message || "app.js failed to load.");
+        var file = String(event.filename || event.target && event.target.src || "");
+        if (/app\.(js|css)|auth\.js|config\.js|supabase\.js/.test(file)) {
+          var name = file.split("/").pop() || "App bundle";
+          renderBootIssue(name + " failed to load.");
         }
-      });
+      }, true);
       window.addEventListener("unhandledrejection", function (event) {
         var reason = event.reason && (event.reason.message || event.reason);
         renderBootIssue(reason || "Startup promise failed.");
       });
+      if (window.KNOCK_CONFIG && !window.supabase) {
+        renderBootIssue("Supabase client failed to load.");
+      } else if (!window.knockAuth) {
+        renderBootIssue("The app auth bundle failed to load.");
+      }
       setTimeout(function () {
         var view = document.getElementById("view");
         if (!window.__knockBooted && view && !view.innerHTML.trim()) {
-          renderBootIssue("The app did not start. Your browser may be using an old cached bundle.");
+          renderBootIssue("The app bundle did not finish loading. Your browser may be using an old cached bundle.");
         }
       }, 2500);
     })();

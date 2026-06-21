@@ -291,30 +291,67 @@ const userId = () => {
   }
   return "dev";
 };
-async function realUserIdFromAuth() {
-  const auth = window.knockAuth;
-  if (isRealUuid(auth?.user?.id)) {
-    rememberActiveUserId(auth.user.id);
-    return auth.user.id;
-  }
-  if (!auth?.client) return "";
+
+function realAuthUserId() {
+  const id = window.knockAuth?.user?.id;
+  return isRealUuid(id) ? id : null;
+}
+function syncKnockUserFromSupabaseUser(sessionUser) {
+  if (!sessionUser?.id || !isRealUuid(sessionUser.id)) return null;
+  const name = sessionUser.user_metadata?.full_name || sessionUser.email || "";
+  const user = {
+    id: sessionUser.id,
+    email: sessionUser.email || "",
+    name,
+    avatar: sessionUser.user_metadata?.avatar_url,
+    initials: name.split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((p) => p[0].toUpperCase()).join(""),
+  };
+  if (window.knockAuth) window.knockAuth.user = user;
+  rememberActiveUserId(user.id);
+  return user;
+}
+
+async function getLiveAuthUser() {
   try {
-    const { data } = await auth.client.auth.getUser();
-    if (isRealUuid(data?.user?.id)) {
-      const name = data.user.user_metadata?.full_name || data.user.email || auth.user?.name || "";
-      auth.user = {
-        ...(auth.user || {}),
-        id: data.user.id,
-        email: data.user.email || auth.user?.email || "",
-        name,
-        avatar: data.user.user_metadata?.avatar_url || auth.user?.avatar,
-        initials: (name || data.user.email || "?").split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((p) => p[0].toUpperCase()).join(""),
-      };
-      rememberActiveUserId(data.user.id);
-      return data.user.id;
+    if (window.knockAuth?.ready) await window.knockAuth.ready;
+  } catch { /* login UI handles auth errors */ }
+
+  let user = window.knockAuth?.user || null;
+  if (isRealUuid(user?.id)) {
+    rememberActiveUserId(user.id);
+    return user;
+  }
+
+  if (window.knockAuth?.client?.auth?.getSession) {
+    try {
+      const { data } = await window.knockAuth.client.auth.getSession();
+      if (data?.session?.user?.id) {
+        user = syncKnockUserFromSupabaseUser(data.session.user);
+        if (user) return user;
+      }
+    } catch (err) {
+      console.warn("[auth] getLiveAuthUser failed", err?.message || err);
     }
-  } catch { /* session refresh failed; caller shows a clean login prompt */ }
-  return "";
+  }
+
+  if (window.knockAuth?.client?.auth?.getUser) {
+    try {
+      const { data } = await window.knockAuth.client.auth.getUser();
+      if (data?.user?.id) {
+        user = syncKnockUserFromSupabaseUser(data.user);
+        if (user) return user;
+      }
+    } catch (err) {
+      console.warn("[auth] getLiveAuthUser getUser failed", err?.message || err);
+    }
+  }
+
+  return null;
+}
+
+async function realUserIdFromAuth() {
+  const user = await getLiveAuthUser();
+  return user?.id || "";
 }
 
 function getAuthSnapshot() {
@@ -328,17 +365,22 @@ function getAuthSnapshot() {
 }
 
 async function waitForAuthReady() {
-  try {
-    if (window.knockAuth?.ready) await window.knockAuth.ready;
-  } catch { /* login UI handles auth errors */ }
-  await realUserIdFromAuth();
-  return getAuthSnapshot();
+  const user = await getLiveAuthUser();
+  const snapshot = getAuthSnapshot();
+  return { ...snapshot, user: user || snapshot.user, hasRealUser: Boolean(user) };
 }
 
-async function requireRealSupabaseAuth(reason = "continue") {
-  const s = await waitForAuthReady();
-  if (s.hasRealUser) return s.user;
+let connectCallbackHandled = false;
 
+async function requireRealSupabaseAuth(reason = "continue", options = {}) {
+  const user = await getLiveAuthUser();
+  if (user) return user;
+
+  if (options.afterLogin) {
+    sessionStorage.setItem("knock_after_login", options.afterLogin);
+  }
+
+  const s = getAuthSnapshot();
   if (!s.hasConfig || !s.hasClient || s.mode === "misconfigured") {
     toast("Supabase browser config is missing on this deployment.");
     return null;
@@ -356,16 +398,17 @@ const MAX_EXTRA_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 state.userFiles = null; /* null = not loaded yet */
 
-const filesApiAvailable = () => userId() !== "dev";
+const filesApiAvailable = () => Boolean(realAuthUserId());
 
 async function loadUserFiles(force = false) {
-  if (!filesApiAvailable()) { state.userFiles = []; return state.userFiles; }
+  const realUserId = await realUserIdFromAuth();
+  if (!realUserId) { state.userFiles = []; return state.userFiles; }
   if (state.userFiles && !force) return state.userFiles;
   try {
     const res = await fetch("/api/files", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: userId(), action: "list" }),
+      body: JSON.stringify({ userId: realUserId, action: "list" }),
     });
     const data = await res.json().catch(() => ({}));
     state.userFiles = data.ok ? data.files || [] : [];
@@ -381,10 +424,8 @@ const userFileById = (id) => (state.userFiles || []).find((f) => f.id === id) ||
 
 async function uploadUserFile(file, kind = "attachment") {
   if (!file) return null;
-  if (!filesApiAvailable()) {
-    toast("Sign in with a real account to store attachments");
-    return null;
-  }
+  const authUser = await requireRealSupabaseAuth("store attachments");
+  if (!authUser) return null;
   if (file.size > MAX_ATTACHMENT_BYTES) {
     toast(`${file.name} is over the 5MB attachment limit`);
     return null;
@@ -394,7 +435,7 @@ async function uploadUserFile(file, kind = "attachment") {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        userId: userId(),
+        userId: authUser.id,
         action: "upload",
         kind,
         name: file.name,
@@ -418,12 +459,13 @@ async function uploadUserFile(file, kind = "attachment") {
 }
 
 async function deleteUserFile(id) {
-  if (!filesApiAvailable()) return false;
+  const authUser = await requireRealSupabaseAuth("store attachments");
+  if (!authUser) return false;
   try {
     const res = await fetch("/api/files", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: userId(), action: "delete", id }),
+      body: JSON.stringify({ userId: authUser.id, action: "delete", id }),
     });
     const data = await res.json().catch(() => ({}));
     if (data.ok) state.userFiles = (state.userFiles || []).filter((f) => f.id !== id);
@@ -570,91 +612,192 @@ function saveConnections() {
   save("knock_connections", state.connections);
 }
 
+function renderSettingsIfCurrent() {
+  if ((location.hash.replace("#", "") || "dashboard") === "settings") renderSettings();
+}
+
+function refreshVisibleConnectionUI() {
+  renderSettingsIfCurrent();
+  refreshSendStrip();
+  updateChrome();
+  const route = location.hash.replace("#", "") || "dashboard";
+  if (["inbox", "dashboard", "tracker", "settings"].includes(route)) navigate();
+}
+
+const GOOGLE_CONNECT_ERRORS = {
+  real_user_required: "Sign in to Knock before connecting Google.",
+  missing_supabase_user: "Sign in to Knock before connecting Google.",
+  missing_refresh_token: "Google did not grant offline access. Remove Knock from your Google Account permissions and try again.",
+  server_not_configured: "Google connect is not configured on this server.",
+  token_exchange_failed: "Google authorization failed. Try connecting again.",
+  userinfo_failed: "Could not read your Google account details.",
+  supabase_save_failed: "Google connected, but Knock could not save the connection.",
+  connection_failed: "Google connect failed. Try again.",
+};
+
 async function connectGoogle() {
-  const user = await requireRealSupabaseAuth("connect Google");
+  console.log("[action]", "connect-google");
+  const user = await requireRealSupabaseAuth("connect Google", {
+    afterLogin: "connect_google",
+  });
   if (!user) return;
-  rememberActiveUserId(user.id);
+
+  console.log("[connectGoogle live user]", {
+    userId: user.id,
+    email: user.email,
+    authMode: window.knockAuth?.mode,
+  });
+
+  const status = await refreshConnectionStatus({ silent: true, rerender: false });
+
+  if (status?.google || state.connections?.google) {
+    sessionStorage.removeItem("knock_google_connecting");
+    sessionStorage.removeItem("knock_after_login");
+    toast("Google is already connected.");
+    releaseWaitingGmailMessages();
+    refreshVisibleConnectionUI();
+    return;
+  }
+
+  sessionStorage.setItem("knock_google_connecting", "1");
+
   const params = new URLSearchParams({
     user_id: user.id,
     user_email: user.email || "",
-    return_to: `${location.pathname || "/app/index.html"}${location.hash || "#settings"}`,
+    return_to: "/app/#settings",
   });
+
   location.href = `/api/google/connect?${params.toString()}`;
 }
 
-async function handleConnectReturn() {
-  const url = new URL(location.href);
-  let touched = false;
-  for (const provider of ["google"]) {
-    const connected = url.searchParams.get(provider) === "connected";
-    const error = url.searchParams.get(`${provider}_error`);
-    if (connected) {
-      if (isRealUuid(window.knockAuth?.user?.id)) rememberActiveUserId(window.knockAuth.user.id);
-      state.connections[provider] = true;
-      saveConnections();
-      await refreshConnectionStatus({ silent: true });
-      toast("Google connected");
-    } else if (error) {
-      const clean = error === "real_user_required" ? "Sign in to Knock before connecting Google." : `Google connect failed: ${esc(error)}`;
-      toast(clean);
-    }
-    touched = touched || connected || Boolean(error);
+async function handleAfterLoginAction() {
+  if (connectCallbackHandled) return;
+
+  const action = sessionStorage.getItem("knock_after_login");
+  if (!action) {
+    sessionStorage.removeItem("knock_google_connecting");
+    return;
   }
-  if (touched) {
-    history.replaceState(null, "", `${location.pathname}${location.hash || "#dashboard"}`);
+
+  const user = await getLiveAuthUser();
+  if (!user) return;
+
+  const url = new URL(location.href);
+  if (url.searchParams.get("google") || url.searchParams.get("google_error")) return;
+
+  sessionStorage.removeItem("knock_after_login");
+  sessionStorage.removeItem("knock_google_connecting");
+
+  if (action === "connect_google") {
+    const status = await refreshConnectionStatus({ silent: true, rerender: false });
+
+    if (status?.google || state.connections?.google) {
+      toast("Google is already connected.");
+      refreshVisibleConnectionUI();
+      return;
+    }
+
+    await connectGoogle();
   }
 }
 
-async function refreshConnectionStatus({ silent = true } = {}) {
-  const s = await waitForAuthReady();
-  if (!s.hasRealUser) {
+async function handleConnectReturn() {
+  const params = new URLSearchParams(location.search || "");
+  const googleConnectedParam = params.get("google") === "connected";
+  const googleError = params.get("google_error") || params.get("error");
+
+  if (!googleConnectedParam && !googleError) return;
+
+  sessionStorage.removeItem("knock_google_connecting");
+  connectCallbackHandled = true;
+  sessionStorage.removeItem("knock_after_login");
+
+  if (googleError) {
+    toast(GOOGLE_CONNECT_ERRORS[googleError] || `Google connect failed: ${String(googleError).replace(/_/g, " ")}`);
+  }
+
+  await getLiveAuthUser();
+  const status = await refreshConnectionStatus({ silent: true, rerender: true });
+
+  if (googleConnectedParam || status?.google) {
+    state.connections.google = true;
+    saveConnections();
+    const pendingVoice = sessionStorage.getItem("knock_after_google_connect");
+    if (pendingVoice === "learn_voice") {
+      sessionStorage.removeItem("knock_after_google_connect");
+    }
+    releaseWaitingGmailMessages();
+    toast("Google connected.");
+    refreshVisibleConnectionUI();
+  }
+
+  history.replaceState(null, "", `${location.pathname}${location.hash || "#settings"}`);
+}
+
+function releaseWaitingGmailMessages() {
+  if (!state.connections.google) return 0;
+  let released = 0;
+  state.messages.forEach((m) => {
+    if (m.status === "waiting_gmail") {
+      m.status = "queued";
+      released++;
+    }
+  });
+  if (released) {
+    saveLive();
+    state.messages.forEach((m) => m.status === "queued" && updateMessageRow(m));
+    processSendQueue();
+  }
+  return released;
+}
+
+async function refreshConnectionStatus({ silent = true, rerender = false } = {}) {
+  const user = await getLiveAuthUser();
+
+  if (!user) {
     const changed = Boolean(state.connections.google);
     state.connections.google = false;
     saveConnections();
-    return { ...state.connections, changed };
+    if (rerender) refreshVisibleConnectionUI();
+    return { ok: false, google: false, reason: "not_signed_in", changed };
   }
+
   try {
     const before = Boolean(state.connections.google);
     const res = await fetch("/api/connections/status", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: s.user.id }),
+      body: JSON.stringify({ userId: user.id }),
     });
     const data = await res.json().catch(() => ({}));
-    if (res.ok && data.ok) {
-      state.connections.google = Boolean(data.connections?.google?.connected || data.connections?.google || data.google);
-      saveConnections();
-      return { ...state.connections, changed: before !== Boolean(state.connections.google) };
+
+    if (!res.ok || data.ok === false) {
+      if (!silent) toast(data.message || data.error || "Could not check Google connection");
+      return { ok: false, google: false, raw: data, changed: false };
     }
-    if (!silent) toast(data.message || data.error || "Could not check Google connection");
+
+    const google = Boolean(data.google || data.connections?.google?.connected || data.connections?.google || data.connections?.gmail);
+    state.connections = { ...(state.connections || {}), google };
+    saveConnections();
+
+    const changed = before !== google;
+    if (google) releaseWaitingGmailMessages();
+    if (rerender || changed) refreshVisibleConnectionUI();
+
+    return { ok: true, google, raw: data, changed };
   } catch {
     if (!silent) toast("Could not check Google connection");
+    return { ok: false, google: Boolean(state.connections.google), changed: false };
   }
-  return { ...state.connections, changed: false };
 }
 
 async function recheckConnectionStatus() {
-  const auth = window.knockAuth;
+  console.log("[action]", "recheck-connection");
   try {
-    if (auth?.ready) await auth.ready;
-    if (auth?.client) {
-      const { data } = await auth.client.auth.getSession();
-      const sessionUser = data?.session?.user;
-      if (sessionUser?.id) {
-        const name = sessionUser.user_metadata?.full_name || sessionUser.email || auth.user?.name || "";
-        auth.user = {
-          ...(auth.user || {}),
-          id: sessionUser.id,
-          email: sessionUser.email || auth.user?.email || "",
-          name,
-          avatar: sessionUser.user_metadata?.avatar_url || auth.user?.avatar,
-          initials: (name || sessionUser.email || "?").split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((p) => p[0].toUpperCase()).join(""),
-        };
-        rememberActiveUserId(sessionUser.id);
-      }
-    }
-    await refreshConnectionStatus({ silent: false });
-    toast("Connection status refreshed");
+    await getLiveAuthUser();
+    const status = await refreshConnectionStatus({ silent: false, rerender: true });
+    if (status?.ok) toast("Connection status refreshed");
+    else toast("Could not refresh connection status");
     renderSettings();
   } catch {
     toast("Could not refresh connection status");
@@ -1343,7 +1486,10 @@ function wireSendStrip() {
   if (!strip || strip.dataset.wired) return;
   strip.dataset.wired = "1";
   strip.addEventListener("click", (e) => {
-    if (e.target.closest("#ss-google")) return connectGoogle();
+    if (e.target.closest("#ss-google")) {
+      console.log("[action]", "dashboard-connect-google");
+      return connectGoogle();
+    }
     if (e.target.closest("#ss-upgrade")) return openUpgrade();
     if (e.target.closest("#ss-dismiss")) return dismissSendStrip();
     /* following the CTA acknowledges the notice: hide it until news arrives */
@@ -1596,7 +1742,8 @@ function openAddContact() {
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return obError("#ac-email", "A valid email address is required.");
 
     if (mode() === "import") {
-      if (userId() === "dev") return obError("#ac-email", "Sign in with a real account to import from Gmail.");
+      const authUser = await requireRealSupabaseAuth("import from Gmail");
+      if (!authUser) return obError("#ac-email", "Sign in with a real account to import from Gmail.");
       if (!googleConnected()) return obError("#ac-email", "Connect Google in Settings first so Scout can read the thread.");
       const btn = $("#ac-go", modal);
       btn.disabled = true; btn.textContent = "Searching your Gmail…";
@@ -1604,7 +1751,7 @@ function openAddContact() {
         const res = await fetch("/api/gmail/import-thread", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId: userId(), email, name, company, title }),
+          body: JSON.stringify({ userId: authUser.id, email, name, company, title }),
         });
         const data = await res.json().catch(() => ({}));
         if (res.status === 404 || data.error === "no_thread_found") {
@@ -1898,10 +2045,12 @@ function openLaunchReview(selected) {
 
 async function runLaunch(selected, scheduleAt, oneOffAttachments = [], batchAttachmentIds = []) {
   try {
+    const authUser = await requireRealSupabaseAuth("launch campaigns");
+    if (!authUser) return;
     const res = await fetch("/api/campaigns/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ doors: selected, userId: userId(), sendPrefs: state.sendPrefs, scheduleAt: scheduleAt || undefined }),
+      body: JSON.stringify({ doors: selected, userId: authUser.id, sendPrefs: state.sendPrefs, scheduleAt: scheduleAt || undefined }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Could not queue campaign");
@@ -1962,6 +2111,34 @@ function setMsgStatus(m, status) {
   updateMessageRow(m);
 }
 
+async function fetchGmailSend({ message, scheduleAt } = {}) {
+  const authUser = await requireRealSupabaseAuth("send Gmail");
+  if (!authUser) return null;
+  const realUserId = authUser.id;
+  if (!isRealUuid(realUserId)) {
+    toast("Sign in to Knock before sending Gmail.");
+    return null;
+  }
+  const { userId: _drop, ...messageFields } = message || {};
+  console.log("[gmail/send payload]", {
+    userId: realUserId,
+    messageId: messageFields.id,
+    to: messageFields.to,
+    subject: messageFields.subject,
+  });
+  const res = await fetch("/api/gmail/send", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      userId: realUserId,
+      message: messageFields,
+      scheduleAt,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  return { res, data };
+}
+
 async function processSendQueue() {
   if (sendRunActive) return;
   /* sending preference says hold: knocks stay safely queued on purpose */
@@ -1976,6 +2153,11 @@ async function processSendQueue() {
     let parked = 0;
     state.messages.forEach((m) => { if (m.status === "queued") { m.status = "waiting_gmail"; parked++; } });
     if (parked) { saveLive(); state.messages.forEach((m) => m.status === "waiting_gmail" && updateMessageRow(m)); }
+    return;
+  }
+  const authUser = await requireRealSupabaseAuth("send Gmail");
+  if (!authUser || !isRealUuid(authUser.id)) {
+    toast("Sign in to Knock before sending Gmail.");
     return;
   }
   sendRunActive = true;
@@ -2103,22 +2285,18 @@ async function processSingleSend(m) {
     const savedIds = m.attachmentIds || attachmentIdsForDoor(d);
     const oneOffs = m.attachments || [];
     m.sentAttachments = sentAttachmentMetadata({ ids: savedIds, oneOffs });
-    const res = await fetch("/api/gmail/send", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        userId: userId(),
-        message: {
-          id: m.id, doorId: m.doorId, campaignId: m.campaignId,
-          to: m.to, toName: m.toName || m.name || d?.name || "",
-          subject: noEmDash(m.subject), body: noEmDash(m.body),
-          attachmentIds: savedIds,
-          attachments: oneOffs,
-        },
-        scheduleAt: m.scheduleAt || undefined,
-      }),
+    const sendResult = await fetchGmailSend({
+      message: {
+        id: m.id, doorId: m.doorId, campaignId: m.campaignId,
+        to: m.to, toName: m.toName || m.name || d?.name || "",
+        subject: noEmDash(m.subject), body: noEmDash(m.body),
+        attachmentIds: savedIds,
+        attachments: oneOffs,
+      },
+      scheduleAt: m.scheduleAt || undefined,
     });
-    const data = await res.json().catch(() => ({}));
+    if (!sendResult) return "stop";
+    const { res, data } = sendResult;
     if (res.ok && data.ok) {
       if (data.gmailMessageId) m.gmailMessageId = data.gmailMessageId;
       if (data.gmailThreadId) m.gmailThreadId = data.gmailThreadId;
@@ -2214,18 +2392,30 @@ const CONNECTIONS = [
 ];
 
 function openConnections() {
+  const googleConn = googleConnectionCopy();
   openModal(`
     <h2>Connections</h2>
     <p class="sub">Everywhere you knock from. Connect once, Scout handles the rest.</p>
     <div class="connlist">
-      ${CONNECTIONS.map((c) => `
+      ${CONNECTIONS.map((c) => {
+        const isGoogle = c.id === "google";
+        const connected = Boolean(state.connections[c.id]);
+        const title = isGoogle ? googleConn.title : c.name;
+        const sub = isGoogle ? googleConn.sub : c.sub;
+        const btn = isGoogle
+          ? (googleConn.disconnect
+            ? `<button class="btn btn--paper btn--sm end act-disconnect">Disconnect</button>`
+            : `<button class="btn btn--sm end act-connect"${googleConn.disabled ? " disabled" : ""}>${esc(googleConn.button)}</button>`)
+          : (connected
+            ? `<button class="btn btn--paper btn--sm end act-disconnect">Disconnect</button>`
+            : `<button class="btn btn--sm end act-connect">Connect</button>`);
+        return `
         <div class="connrow" data-id="${c.id}">
           <span class="ico">${I[c.icn]}</span>
-          <div><strong>${c.name}</strong><small>${state.connections[c.id] ? "Connected · " : ""}${c.sub}</small></div>
-          ${state.connections[c.id]
-            ? `<button class="btn btn--paper btn--sm end act-disconnect">Disconnect</button>`
-            : `<button class="btn btn--sm end act-connect">${c.id === "google" ? "Connect Google" : "Connect"}</button>`}
-        </div>`).join("")}
+          <div><strong>${c.name}</strong><small>${connected && !isGoogle ? "Connected · " : ""}${isGoogle ? `<strong>${esc(title)}</strong> · ${esc(sub)}` : esc(sub)}</small></div>
+          ${btn}
+        </div>`;
+      }).join("")}
     </div>
     <p class="connlist__fine">Google connects Gmail and Calendar. Additional channels can be managed later without changing your drafts.</p>
     <div class="modal__actions"><button class="btn btn--ghost" id="m-close">Done</button></div>`);
@@ -2237,6 +2427,7 @@ function openConnections() {
   };
   $$(".act-connect", modal).forEach((b) =>
     b.addEventListener("click", (e) => {
+      if (b.disabled) return;
       const id = e.target.closest(".connrow").dataset.id;
       if (id === "google") return connectGoogle();
       setConn(id, true);
@@ -2375,11 +2566,13 @@ async function openAttachmentPreview(att) {
     return;
   }
   try {
+    const authUser = await requireRealSupabaseAuth("preview attachments");
+    if (!authUser) throw new Error("Sign in to Knock first.");
     const res = await fetch("/api/gmail/attachment", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        userId: userId(),
+        userId: authUser.id,
         gmailMessageId: att.gmailMessageId || att.messageId,
         attachmentId: att.attachmentId,
         fileName: name,
@@ -2466,13 +2659,14 @@ function normalizeThreadMessages(m) {
 }
 
 async function persistMessageOrg(m) {
-  if (!m || userId() === "dev") return;
+  const realUserId = realAuthUserId();
+  if (!m || !realUserId) return;
   try {
     await fetch("/api/messages/organize", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        userId: userId(),
+        userId: realUserId,
         messageId: m.id,
         archivedAt: m.archivedAt || null,
         deletedAt: m.deletedAt || null,
@@ -2496,12 +2690,14 @@ async function deleteThreadFromKnock(m) {
   updateChrome();
   renderInbox();
 
-  if (userId() === "dev" || !isRealUuid(previousId)) return;
+  if (!isRealUuid(previousId)) return;
+  const realUserId = realAuthUserId();
+  if (!realUserId) return;
   try {
     await fetch("/api/messages/organize", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: userId(), messageId: previousId, action: "delete" }),
+      body: JSON.stringify({ userId: realUserId, messageId: previousId, action: "delete" }),
     });
   } catch { /* local removal already happened */ }
 }
@@ -2547,7 +2743,7 @@ async function refreshConversation(m, silent = false) {
   if (!user) return false;
   const connections = await refreshConnectionStatus({ silent: true });
   if (!connections.google) {
-    if (!silent) toast("Connect Google to refresh Gmail threads.");
+    if (!silent) connectGoogle();
     return false;
   }
   const hasRefreshReference = Boolean(m.gmailThreadId || m.gmailMessageId || isRealUuid(m.id));
@@ -2634,24 +2830,20 @@ async function sendThreadReply(m, { subject, body, bodyHtml = "", attachments = 
   const safeHtml = bodyHtml ? sanitizeRichHtml(bodyHtml) : "";
   if (!m.to) throw new Error("No verified email found. Apollo enrichment did not return one.");
   if (!replySubject || !replyBody) throw new Error("Reply needs a subject and body.");
-  const res = await fetch("/api/gmail/send", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      userId: userId(),
-      message: {
-        id: m.id, doorId: m.doorId, campaignId: m.campaignId,
-        to: m.to, toName: m.name || d?.name || "",
-        subject: replySubject,
-        body: replyBody,
-        bodyHtml: safeHtml,
-        kind,
-        threadId: m.gmailThreadId,
-        attachments,
-      },
-    }),
+  const sendResult = await fetchGmailSend({
+    message: {
+      id: m.id, doorId: m.doorId, campaignId: m.campaignId,
+      to: m.to, toName: m.name || d?.name || "",
+      subject: replySubject,
+      body: replyBody,
+      bodyHtml: safeHtml,
+      kind,
+      threadId: m.gmailThreadId,
+      attachments,
+    },
   });
-  const data = await res.json().catch(() => ({}));
+  if (!sendResult) throw new Error("Sign in to Knock before sending Gmail.");
+  const { res, data } = sendResult;
   if (res.status === 412 || data.error === "google_not_connected") throw new Error("Google isn't connected");
   if (!res.ok || !data.ok) throw new Error(data.message || data.error || `Send failed (${res.status})`);
   if (data.gmailThreadId) m.gmailThreadId = data.gmailThreadId;
@@ -3183,6 +3375,7 @@ function renderTracker() {
       toast("Retrying that knock");
       processSendQueue();
     } else if (btn.classList.contains("msg-connect")) {
+      console.log("[action]", "inbox-connect-google");
       connectGoogle();
     } else if (btn.classList.contains("msg-reply")) {
       openSuggestedReply(m);
@@ -3459,9 +3652,9 @@ function voiceLearningCardHTML() {
       ` : !auth.hasRealUser ? `
         <div class="voicelearn-status">
           <strong>Sign in to learn your voice.</strong>
-          <small>Your saved profile can appear on this device even when you are not signed in.</small>
+          <small>Sign into Knock first, then connect Google to scan sent mail.</small>
         </div>
-        <button class="btn btn--accent btn--sm" id="voice-signin">Sign in</button>
+        <button class="btn btn--accent btn--sm" id="voice-signin">Sign in &amp; learn my voice</button>
       ` : learned ? `
         <div class="voicelearn-status">
           <strong>Learned from ${count} sent email${count === 1 ? "" : "s"}</strong>
@@ -3482,9 +3675,9 @@ function voiceLearningCardHTML() {
       ` : `
         <div class="voicelearn-status">
           <strong>Connect Google to learn from sent emails.</strong>
-          <small>Scout uses the same Gmail connection it uses to send and refresh threads.</small>
+          <small>Approve Gmail permissions, then Scout can scan sent mail only.</small>
         </div>
-        <button class="btn btn--sm" id="voice-connect">Connect Google</button>
+        <button class="btn btn--sm" id="voice-connect">Connect Google to learn</button>
       `;
   return `
     <div class="pcard voicelearn-card">
@@ -3500,7 +3693,7 @@ async function learnVoiceFromGmail() {
   if (!user) return;
   const connections = await refreshConnectionStatus({ silent: false });
   if (!connections.google) {
-    connectGoogle();
+    startVoiceGoogleConnect();
     return;
   }
   openModal(`
@@ -3617,9 +3810,12 @@ function resetLearnedVoice(fromModal = false) {
 }
 
 function wireVoiceLearningCard() {
-  $("#voice-signin", view)?.addEventListener("click", () => window.knockAuth?.openLogin?.());
-  $("#voice-connect", view)?.addEventListener("click", connectGoogle);
-  $("#voice-learn", view)?.addEventListener("click", learnVoiceFromGmail);
+  $("#voice-signin", view)?.addEventListener("click", () => startVoiceSignInFlow());
+  $("#voice-connect", view)?.addEventListener("click", () => startVoiceGoogleConnect());
+  $("#voice-learn", view)?.addEventListener("click", () => {
+    console.log("[action]", "learn-from-gmail");
+    learnVoiceFromGmail();
+  });
   $("#voice-review", view)?.addEventListener("click", openVoiceReview);
   $("#voice-reset", view)?.addEventListener("click", () => resetLearnedVoice(false));
 }
@@ -4222,6 +4418,72 @@ function renderProfile() {
 /* ============================================================
    SETTINGS
    ============================================================ */
+function googleConnectionCopy() {
+  const s = getAuthSnapshot();
+  if (!s.hasConfig || !s.hasClient || s.mode === "misconfigured") {
+    return {
+      title: "Unavailable",
+      sub: "Add Supabase browser config before connecting Google.",
+      button: "Supabase config missing",
+      disabled: true,
+      disconnect: false,
+    };
+  }
+  if (!s.hasRealUser) {
+    return {
+      title: "Not signed into Knock",
+      sub: "First sign into Knock, then approve Gmail and Calendar permissions.",
+      button: "Sign in & connect Google",
+      disabled: false,
+      disconnect: false,
+    };
+  }
+  if (googleConnected()) {
+    return {
+      title: "Google connected",
+      sub: "Gmail and Calendar are linked for sends, replies, and meetings.",
+      button: "Disconnect",
+      disabled: false,
+      disconnect: true,
+    };
+  }
+  return {
+    title: "Google not connected",
+    sub: "Approve Gmail and Calendar permissions.",
+    button: "Connect Google",
+    disabled: false,
+    disconnect: false,
+  };
+}
+
+function startSignInAndConnectGoogle() {
+  console.log("[action]", "sign-in-connect-google");
+  return connectGoogle();
+}
+
+async function startVoiceSignInFlow() {
+  console.log("[action]", "sign-in-learn-voice");
+  const user = await getLiveAuthUser();
+  if (user) {
+    sessionStorage.setItem("knock_after_google_connect", "learn_voice");
+    return connectGoogle();
+  }
+  sessionStorage.setItem("knock_after_login", "connect_google");
+  sessionStorage.setItem("knock_after_google_connect", "learn_voice");
+  const s = getAuthSnapshot();
+  if (!s.hasConfig || !s.hasClient || s.mode === "misconfigured") {
+    toast("Supabase browser config is missing on this deployment.");
+    return;
+  }
+  window.knockAuth?.openLogin?.();
+}
+
+function startVoiceGoogleConnect() {
+  console.log("[action]", "connect-google-learn-voice");
+  sessionStorage.setItem("knock_after_google_connect", "learn_voice");
+  connectGoogle();
+}
+
 function authDiagnosticText() {
   const s = getAuthSnapshot();
   if (s.mode === "dev") return "Auth: Dev mode · Google unavailable";
@@ -4237,16 +4499,25 @@ let settingsConnectionRefreshInFlight = false;
 
 function renderSettings() {
   const auth = getAuthSnapshot();
-  const user = auth.user || { email: "Not signed in", name: "Not signed in" };
+  const user = auth.user || { email: "", name: "" };
   const isDev = auth.mode === "dev";
   const p = state.profile || {};
+  const googleConn = googleConnectionCopy();
+  const accountName = auth.hasRealUser
+    ? (user.name || user.email || "Account")
+    : (p.fullName || user.name || "Your profile");
+  const accountSub = auth.hasRealUser
+    ? `${user.email || ""}${isDev ? " · dev login (configure Supabase for real auth)" : ""}`
+    : "Not signed in · Local profile saved on this device";
   view.innerHTML = `<div class="viewwrap">
     <div class="vh"><h1>Settings</h1><p>How Scout behaves in other people's inboxes.</p></div>
     <div class="settings-grid">
       <div class="pcard">
         <h3>Account</h3>
-        <div class="setrow"><span class="ico">${I.story}</span><div><strong>${esc(user.name || user.email)}</strong><small>${esc(user.email)}${isDev ? " · dev login (configure Supabase for real auth)" : ""}</small></div>
-          <button class="btn btn--paper btn--sm end" id="set-logout">Log out</button></div>
+        <div class="setrow"><span class="ico">${I.story}</span><div><strong>${esc(accountName)}</strong><small>${esc(accountSub)}</small></div>
+          ${auth.hasRealUser
+            ? `<button class="btn btn--paper btn--sm end" id="set-logout">Log out</button>`
+            : `<button class="btn btn--accent btn--sm end" id="set-signin">Sign in</button>`}</div>
         <div class="setrow"><span class="ico">${I.plug}</span><div><strong>Auth status</strong><small id="auth-status-line">${esc(authDiagnosticText())}</small></div></div>
         <div class="setrow"><span class="ico">${I.plug}</span><div><strong>Apollo sourcing</strong><small id="apollo-status">checking…</small></div></div>
         <div class="setrow"><span class="ico">${I.pen}</span><div><strong>Reset my data</strong><small>Clears your profile, doors, and campaigns on this device</small></div>
@@ -4278,13 +4549,10 @@ function renderSettings() {
       </div>
       <div class="pcard">
         <h3>Connections</h3>
-        ${[
-          ["google", "mail", "Google", "Connect Gmail and Calendar to send emails, detect replies, and schedule meetings."],
-        ].map(([id, icn, name, sub]) => `
-        <div class="setrow"><span class="ico">${I[icn]}</span><div><strong>${name}</strong><small>${state.connections[id] ? "Connected · " + sub : "Not connected. " + sub[0].toUpperCase() + sub.slice(1)}</small></div>
-          ${state.connections[id]
-            ? `<button class="btn btn--paper btn--sm end conn-off" data-id="${id}">Disconnect</button>`
-            : `<button class="btn btn--sm end conn-on" data-id="${id}">${id === "google" ? "Connect Google" : "Connect"}</button>`}</div>`).join("")}
+        <div class="setrow"><span class="ico">${I.mail}</span><div><strong>Google</strong><small><strong>${esc(googleConn.title)}</strong> · ${esc(googleConn.sub)}</small></div>
+          ${googleConn.disconnect
+            ? `<button class="btn btn--paper btn--sm end conn-off" data-id="google">Disconnect</button>`
+            : `<button class="btn btn--sm end conn-on" data-id="google"${googleConn.disabled ? " disabled" : ""}>${esc(googleConn.button)}</button>`}</div>
         <div class="setrow"><span class="ico">${I.plug}</span><div><strong>All channels</strong><small>Outlook and more</small></div>
           <button class="btn btn--paper btn--sm end" id="set-connections">Manage</button></div>
         <div class="setrow"><span class="ico">${I.search}</span><div><strong>Connection status</strong><small>Ask the server what is connected for this account</small></div>
@@ -4316,7 +4584,13 @@ function renderSettings() {
   $("#conn-recheck", view)?.addEventListener("click", recheckConnectionStatus);
   wireVoiceLearningCard();
   $("#pro-redeem", view)?.addEventListener("click", redeemProCode);
-  $("#set-logout", view).addEventListener("click", () => window.knockAuth.signOut());
+  $("#set-logout", view)?.addEventListener("click", () => window.knockAuth.signOut());
+  $("#set-signin", view)?.addEventListener("click", async () => {
+    console.log("[action]", "sign-in");
+    const user = await getLiveAuthUser();
+    if (user) return connectGoogle();
+    window.knockAuth?.openLogin?.();
+  });
   $("#set-reset", view).addEventListener("click", () => {
     openModal(`
       <h2>Reset your data?</h2>
@@ -4336,19 +4610,17 @@ function renderSettings() {
     });
   });
   $$(".conn-on", view).forEach((b) => b.addEventListener("click", () => {
-    if (b.dataset.id === "google") return connectGoogle();
+    if (b.disabled) return;
+    if (b.dataset.id === "google") connectGoogle();
   }));
   $$(".conn-off", view).forEach((b) => b.addEventListener("click", () => disconnectProvider(b.dataset.id)));
 
   if (!settingsConnectionRefreshInFlight) {
     settingsConnectionRefreshInFlight = true;
-    refreshConnectionStatus({ silent: true }).then(({ changed } = {}) => {
+    refreshConnectionStatus({ silent: true, rerender: true }).then(() => {
       settingsConnectionRefreshInFlight = false;
-      if (changed && (location.hash.replace("#", "") || "dashboard") === "settings") renderSettings();
-      else {
-        const line = $("#auth-status-line", view);
-        if (line) line.textContent = authDiagnosticText();
-      }
+      const line = $("#auth-status-line", view);
+      if (line) line.textContent = authDiagnosticText();
     }).catch(() => {
       settingsConnectionRefreshInFlight = false;
     });
@@ -4463,12 +4735,14 @@ async function redeemProCode() {
   const btn = $("#pro-redeem", view);
   const code = input?.value.trim();
   if (!code) { toast("Enter a license key first"); return; }
+  const authUser = await requireRealSupabaseAuth("redeem a license");
+  if (!authUser) return;
   btn.disabled = true; btn.textContent = "Checking...";
   try {
     const res = await fetch("/api/billing/redeem-code", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: userId(), code }),
+      body: JSON.stringify({ userId: authUser.id, code }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.ok) throw new Error(data.error || `Redeem failed (${res.status})`);
@@ -5149,7 +5423,7 @@ $("#acct-tour")?.addEventListener("click", () => { $("#acct-menu").hidden = true
       <div class="ghost__icon ghost__icon--spin">${I.spark}</div>
       <h2>Opening your doors…</h2>
     </div></div>`;
-    const user = await window.knockAuth?.ready;
+    const user = await getLiveAuthUser();
     if (!user) {
       /* genuinely no session anywhere: back to the landing login */
       location.replace("/#login");
@@ -5159,16 +5433,15 @@ $("#acct-tour")?.addEventListener("click", () => { $("#acct-menu").hidden = true
     if (/access_token|refresh_token|error_description/.test(location.hash)) {
       history.replaceState(null, "", location.pathname + "#dashboard");
     }
-    if (isRealUuid(user.id)) rememberActiveUserId(user.id);
+    rememberActiveUserId(user.id);
     await handleConnectReturn();
     /* pull the profile and synced app state back from Supabase before
        deciding on onboarding, so a new device starts with everything */
     await hydrateFromSupabase();
+    await handleAfterLoginAction();
     initAccount();
     navigate();
-    refreshConnectionStatus({ silent: true }).then(({ changed } = {}) => {
-      if (changed) navigate();
-    });
+    await refreshConnectionStatus({ silent: true, rerender: true });
     refreshApolloUsage();
     if (!state.profile) openOnboarding(1);
 
