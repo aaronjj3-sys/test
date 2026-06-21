@@ -3594,6 +3594,98 @@ async function refreshStyleFromEdits() {
   } catch { /* style learning is a bonus, never a blocker */ }
 }
 
+function learnedStyleMeta(p = {}) {
+  if (!p.gmailStyleLearnedAt) return "";
+  const date = new Date(p.gmailStyleLearnedAt);
+  const when = Number.isNaN(date.getTime()) ? "recently" : date.toLocaleDateString([], { month: "short", day: "numeric" });
+  const count = Number(p.gmailStyleMessageCount || 0);
+  const email = p.gmailStyleProviderEmail || "Gmail";
+  return `Learned from ${count} sent email${count === 1 ? "" : "s"} from ${email} on ${when}.`;
+}
+
+function styleSummaryHTML(style = {}) {
+  if (!style || typeof style !== "object") return `<p class="empty-line">No learned style profile yet.</p>`;
+  const common = Array.isArray(style.commonPhrases) ? style.commonPhrases : [];
+  const rows = [
+    ["Tone", style.tone || style.energy],
+    ["Formality", style.formality],
+    ["Opening", style.openingStyle || style.greetingStyle],
+    ["Closing", style.closingStyle || style.signoffStyle],
+    ["Phrases", common.slice(0, 5).join(", ") || style.vocabularyNotes],
+  ].filter(([, value]) => value);
+  if (!rows.length) return `<p class="empty-line">No learned style profile yet.</p>`;
+  return `<div class="style-summary">${rows.map(([label, value]) => `
+    <span><b>${esc(label)}</b>${esc(value)}</span>`).join("")}</div>`;
+}
+
+function gmailLearnButtonLabel(p = state.profile) {
+  if (!isRealUuid(window.knockAuth?.user?.id)) return "Sign in to learn";
+  if (!state.connections?.google) return "Connect Google first";
+  return p?.gmailStyleLearnedAt ? "Re-learn from Gmail" : "Learn from Gmail";
+}
+
+async function learnStyleFromGmail(btn = null) {
+  if (!state.profile) {
+    toast("Build your profile first, then Scout can learn your voice.");
+    return;
+  }
+
+  const realUserId = await requireRealUserId("learn from Gmail");
+  if (!realUserId) return;
+
+  const status = await refreshConnectionStatus({ silent: true, rerender: false });
+  if (!status.google && !state.connections?.google) {
+    toast("Connect Google first.");
+    const route = location.hash.replace("#", "") || "dashboard";
+    if (route === "settings") renderSettings();
+    if (route === "profile") renderProfile();
+    return;
+  }
+
+  const oldText = btn?.textContent || "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Learning...";
+  }
+
+  try {
+    const res = await fetch("/api/gmail/learn-style", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: realUserId, maxMessages: 25 }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (data.error === "google_not_connected") {
+      toast("Connect Google first.");
+      return;
+    }
+    if (data.error === "not_enough_sent_email") {
+      toast("Not enough sent emails to learn from yet. Add writing samples instead.");
+      return;
+    }
+    if (!res.ok || !data.ok || !data.styleProfile) throw new Error(data.error || `Learn failed (${res.status})`);
+
+    state.profile.styleProfile = data.styleProfile;
+    state.profile.gmailStyleLearnedAt = new Date().toISOString();
+    state.profile.gmailStyleMessageCount = data.messageCount || 0;
+    state.profile.gmailStyleProviderEmail = data.providerEmail || "";
+    saveProfile();
+    toast(`Scout learned your voice from ${data.messageCount || 0} sent emails.`);
+
+    const route = location.hash.replace("#", "") || "dashboard";
+    if (route === "profile") renderProfile();
+    else if (route === "settings") renderSettings();
+  } catch (err) {
+    console.warn("[gmail/learn-style] failed", err?.message || err);
+    toast("Could not learn from Gmail yet.");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = oldText || gmailLearnButtonLabel();
+    }
+  }
+}
+
 /* ---- durable profile persistence (Supabase `profiles` table) ----
    Debounced upsert on every save; failures log to console only and the
    app keeps running on localStorage (dev mode has no Supabase at all). */
@@ -3810,6 +3902,13 @@ function renderProfile() {
             <span class="voicebox__text"><b>Writing voice</b>: tone <b>${esc(p.tone || "Sharp")}</b> · sign-off <b>${esc(p.signoff || "- " + firstName())}</b></span>
             <button class="edit" id="edit-voice">Edit</button>
           </div>
+          <div class="voicelearn">
+            <div>
+              <b>Gmail voice learning</b>
+              <small>${p.gmailStyleLearnedAt ? esc(learnedStyleMeta(p)) : "Analyze sent email tone and phrasing only. Raw email bodies are not saved."}</small>
+            </div>
+            <button class="btn btn--paper btn--sm" id="learn-gmail-profile">${esc(gmailLearnButtonLabel(p))}</button>
+          </div>
         </div>
         <div class="pcard">
           <h3>Resume <button class="edit" id="re-upload">Re-upload</button></h3>
@@ -3927,6 +4026,7 @@ function renderProfile() {
       toast("Voice updated");
     });
   });
+  $("#learn-gmail-profile", view)?.addEventListener("click", (e) => learnStyleFromGmail(e.currentTarget));
 
   /* story inline edit */
   $('[data-edit="story"]', view).addEventListener("click", () => {
@@ -4193,6 +4293,7 @@ function renderSettings() {
   const user = window.knockAuth?.user || { email: "dev@knock.local", name: "Dev" };
   const isDev = (window.knockAuth?.mode || "dev") === "dev";
   const p = state.profile || {};
+  const learnedMeta = learnedStyleMeta(p);
   view.innerHTML = `<div class="viewwrap">
     <div class="vh"><h1>Settings</h1><p>How Scout behaves in other people's inboxes.</p></div>
     <div class="settings-grid">
@@ -4226,6 +4327,18 @@ function renderSettings() {
           <button class="btn btn--paper btn--sm end" id="file-add">Upload</button>
         </div>
         <input type="file" id="file-add-input" multiple hidden>
+      </div>
+      <div class="pcard">
+        <h3>Voice learning</h3>
+        <p class="setcopy">Scout can learn your writing style from your sent Gmail messages. It analyzes tone and phrasing only, not personal facts.</p>
+        <div class="voicelearn voicelearn--settings">
+          <div>
+            <strong>${p.gmailStyleLearnedAt ? "Gmail style learned" : "Manual Gmail learning"}</strong>
+            <small>${learnedMeta ? esc(learnedMeta) : "We only analyze sent email writing style. We do not save raw email bodies."}</small>
+          </div>
+          <button class="btn btn--sm ${state.connections.google ? "btn--accent" : "btn--paper"}" id="learn-gmail-settings">${esc(gmailLearnButtonLabel(p))}</button>
+        </div>
+        ${styleSummaryHTML(p.styleProfile)}
       </div>
       <div class="pcard">
         <h3>Connections</h3>
@@ -4262,6 +4375,7 @@ function renderSettings() {
   $("#set-sendprefs", view).addEventListener("click", () => openSendPrefs(renderSettings));
   $("#set-feedback", view).addEventListener("click", openFeedback);
   $("#set-connections", view).addEventListener("click", openConnections);
+  $("#learn-gmail-settings", view)?.addEventListener("click", (e) => learnStyleFromGmail(e.currentTarget));
   $("#pro-redeem", view)?.addEventListener("click", redeemProCode);
   $("#set-logout", view).addEventListener("click", () => window.knockAuth.signOut());
   $("#set-reset", view).addEventListener("click", () => {

@@ -16,17 +16,13 @@ import { stylePrompt, STYLE_JSON_SCHEMA } from "../../lib/knock/prompts.js";
 
 const MAX_SAMPLE_CHARS = 12_000;
 
-export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
-  const { samples = [], story = "" } = req.body || {};
-  const texts = [story, ...samples].filter((s) => typeof s === "string" && s.trim());
-
+export async function analyzeStyleFromTexts(texts = [], { maxSampleChars = MAX_SAMPLE_CHARS } = {}) {
   const deterministic = analyzeStyleDeterministic(texts);
   if (!deterministic) {
-    return res.status(200).json({ ok: false, styleProfile: null, note: "No writing samples to learn from yet." });
+    return { ok: false, styleProfile: null, note: "No writing samples to learn from yet." };
   }
 
-  const corpus = texts.join("\n\n---\n\n").slice(0, MAX_SAMPLE_CHARS);
+  const corpus = texts.join("\n\n---\n\n").slice(0, maxSampleChars);
 
   let refined = null;
   let refinedSource = null;
@@ -63,5 +59,13 @@ export default async function handler(req, res) {
       }
     : deterministic;
 
-  return res.status(200).json({ ok: true, source: styleProfile.source, styleProfile });
+  return { ok: true, source: styleProfile.source, styleProfile };
+}
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
+  const { samples = [], story = "" } = req.body || {};
+  const texts = [story, ...samples].filter((s) => typeof s === "string" && s.trim());
+  const result = await analyzeStyleFromTexts(texts);
+  return res.status(200).json(result);
 }

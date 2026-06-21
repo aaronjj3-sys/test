@@ -30,6 +30,7 @@ const apiRoutes = [
   "api/files.js",
   "api/gmail/attachment.js",
   "api/gmail/import-thread.js",
+  "api/gmail/learn-style.js",
   "api/gmail/send.js",
   "api/gmail/sync.js",
   "api/google/callback.js",

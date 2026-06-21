@@ -804,6 +804,25 @@ tbody tr:hover { background: var(--accent-soft); }
 .voicebox__text { flex: 1; min-width: 0; }
 .voicebox .edit { position: static; flex: none; margin-top: 0.1rem; font-size: 0.7rem; font-weight: 700; color: var(--ink-faint); background: none; border: none; padding: 0; }
 .voicebox .edit:hover { color: var(--accent-deep); }
+.voicelearn {
+  margin-top: 0.75rem;
+  padding: 0.75rem 0.85rem;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  text-align: left;
+}
+.voicelearn b, .voicelearn strong { display: block; font-size: 0.82rem; font-weight: 900; color: var(--ink); }
+.voicelearn small { display: block; margin-top: 0.15rem; color: var(--ink-faint); font-size: 0.72rem; font-weight: 650; line-height: 1.4; }
+.voicelearn .btn { margin-left: auto; flex: none; }
+.voicelearn--settings { margin: 0.8rem 0 0.75rem; background: var(--panel); }
+.setcopy { color: var(--ink-soft); font-size: 0.82rem; line-height: 1.5; margin-top: 0.25rem; }
+.style-summary { display: grid; gap: 0.35rem; padding-top: 0.15rem; font-size: 0.76rem; color: var(--ink-soft); }
+.style-summary span { display: flex; gap: 0.45rem; line-height: 1.35; }
+.style-summary b { color: var(--ink); min-width: 72px; font-weight: 900; }
 .xp__actions { display: flex; gap: 0.7rem; margin-top: 0.3rem; }
 .xp__actions .edit { font-size: 0.7rem; font-weight: 700; color: var(--ink-faint); background: none; border: none; padding: 0; }
 .xp__actions .edit:hover { color: var(--accent-deep); }
@@ -1209,5 +1228,7 @@ td.cell-msgact .btn + .btn { margin-left: 0.4rem; }
   .thread-actions { margin-left: 0; justify-content: flex-start; }
   .threadstate { align-items: flex-start; flex-direction: column; }
   .threadstate .btn { margin-left: 0; }
+  .voicelearn { align-items: flex-start; flex-direction: column; }
+  .voicelearn .btn { margin-left: 0; }
   .replyfoot, .redeemrow__form { flex-wrap: wrap; }
 }
