@@ -335,9 +335,15 @@ async function waitForAuthReady() {
   return getAuthSnapshot();
 }
 
-async function requireRealSupabaseAuth(reason = "continue") {
+let connectCallbackHandled = false;
+
+async function requireRealSupabaseAuth(reason = "continue", options = {}) {
   const s = await waitForAuthReady();
   if (s.hasRealUser) return s.user;
+
+  if (options.afterLogin) {
+    sessionStorage.setItem("knock_after_login", options.afterLogin);
+  }
 
   if (!s.hasConfig || !s.hasClient || s.mode === "misconfigured") {
     toast("Supabase browser config is missing on this deployment.");
@@ -570,16 +576,77 @@ function saveConnections() {
   save("knock_connections", state.connections);
 }
 
+function renderSettingsIfCurrent() {
+  if ((location.hash.replace("#", "") || "dashboard") === "settings") renderSettings();
+}
+
+const GOOGLE_CONNECT_ERRORS = {
+  real_user_required: "Sign in to Knock before connecting Google.",
+  missing_supabase_user: "Sign in to Knock before connecting Google.",
+  missing_refresh_token: "Google did not grant offline access. Remove Knock from your Google Account permissions and try again.",
+  server_not_configured: "Google connect is not configured on this server.",
+  token_exchange_failed: "Google authorization failed. Try connecting again.",
+  userinfo_failed: "Could not read your Google account details.",
+  supabase_save_failed: "Google connected, but Knock could not save the connection.",
+  connection_failed: "Google connect failed. Try again.",
+};
+
 async function connectGoogle() {
-  const user = await requireRealSupabaseAuth("connect Google");
+  const user = await requireRealSupabaseAuth("connect Google", {
+    afterLogin: "connect_google",
+  });
   if (!user) return;
-  rememberActiveUserId(user.id);
+
+  await refreshConnectionStatus({ silent: true });
+
+  if (state.connections.google) {
+    sessionStorage.removeItem("knock_google_connecting");
+    sessionStorage.removeItem("knock_after_login");
+    toast("Google is already connected.");
+    renderSettingsIfCurrent();
+    return;
+  }
+
+  sessionStorage.setItem("knock_google_connecting", "1");
+
   const params = new URLSearchParams({
     user_id: user.id,
     user_email: user.email || "",
-    return_to: `${location.pathname || "/app/index.html"}${location.hash || "#settings"}`,
+    return_to: "/app/#settings",
   });
+
   location.href = `/api/google/connect?${params.toString()}`;
+}
+
+async function handleAfterLoginAction() {
+  if (connectCallbackHandled) return;
+
+  const action = sessionStorage.getItem("knock_after_login");
+  if (!action) {
+    sessionStorage.removeItem("knock_google_connecting");
+    return;
+  }
+
+  const s = await waitForAuthReady();
+  if (!s.hasRealUser) return;
+
+  const url = new URL(location.href);
+  if (url.searchParams.get("google") || url.searchParams.get("google_error")) return;
+
+  sessionStorage.removeItem("knock_after_login");
+  sessionStorage.removeItem("knock_google_connecting");
+
+  if (action === "connect_google") {
+    await refreshConnectionStatus({ silent: true });
+
+    if (state.connections.google) {
+      toast("Google is already connected.");
+      renderSettingsIfCurrent();
+      return;
+    }
+
+    await connectGoogle();
+  }
 }
 
 async function handleConnectReturn() {
@@ -588,20 +655,29 @@ async function handleConnectReturn() {
   for (const provider of ["google"]) {
     const connected = url.searchParams.get(provider) === "connected";
     const error = url.searchParams.get(`${provider}_error`);
+    if (!connected && !error) continue;
+
+    sessionStorage.removeItem("knock_google_connecting");
+    touched = true;
+    if (isRealUuid(window.knockAuth?.user?.id)) rememberActiveUserId(window.knockAuth.user.id);
+    await refreshConnectionStatus({ silent: true });
+
     if (connected) {
-      if (isRealUuid(window.knockAuth?.user?.id)) rememberActiveUserId(window.knockAuth.user.id);
-      state.connections[provider] = true;
-      saveConnections();
-      await refreshConnectionStatus({ silent: true });
-      toast("Google connected");
-    } else if (error) {
-      const clean = error === "real_user_required" ? "Sign in to Knock before connecting Google." : `Google connect failed: ${esc(error)}`;
-      toast(clean);
+      toast("Google connected.");
+      const pendingVoice = sessionStorage.getItem("knock_after_google_connect");
+      if (pendingVoice === "learn_voice") {
+        sessionStorage.removeItem("knock_after_google_connect");
+        toast("Google connected. Tap Learn from Gmail when you are ready.");
+      }
+    } else {
+      toast(GOOGLE_CONNECT_ERRORS[error] || `Google connect failed: ${String(error || "unknown_error").replace(/_/g, " ")}`);
     }
-    touched = touched || connected || Boolean(error);
   }
   if (touched) {
-    history.replaceState(null, "", `${location.pathname}${location.hash || "#dashboard"}`);
+    connectCallbackHandled = true;
+    sessionStorage.removeItem("knock_after_login");
+    history.replaceState(null, "", `${location.pathname}${location.hash || "#settings"}`);
+    renderSettingsIfCurrent();
   }
 }
 
@@ -2214,18 +2290,30 @@ const CONNECTIONS = [
 ];
 
 function openConnections() {
+  const googleConn = googleConnectionCopy();
   openModal(`
     <h2>Connections</h2>
     <p class="sub">Everywhere you knock from. Connect once, Scout handles the rest.</p>
     <div class="connlist">
-      ${CONNECTIONS.map((c) => `
+      ${CONNECTIONS.map((c) => {
+        const isGoogle = c.id === "google";
+        const connected = Boolean(state.connections[c.id]);
+        const title = isGoogle ? googleConn.title : c.name;
+        const sub = isGoogle ? googleConn.sub : c.sub;
+        const btn = isGoogle
+          ? (googleConn.disconnect
+            ? `<button class="btn btn--paper btn--sm end act-disconnect">Disconnect</button>`
+            : `<button class="btn btn--sm end act-connect"${googleConn.disabled ? " disabled" : ""}>${esc(googleConn.button)}</button>`)
+          : (connected
+            ? `<button class="btn btn--paper btn--sm end act-disconnect">Disconnect</button>`
+            : `<button class="btn btn--sm end act-connect">Connect</button>`);
+        return `
         <div class="connrow" data-id="${c.id}">
           <span class="ico">${I[c.icn]}</span>
-          <div><strong>${c.name}</strong><small>${state.connections[c.id] ? "Connected · " : ""}${c.sub}</small></div>
-          ${state.connections[c.id]
-            ? `<button class="btn btn--paper btn--sm end act-disconnect">Disconnect</button>`
-            : `<button class="btn btn--sm end act-connect">${c.id === "google" ? "Connect Google" : "Connect"}</button>`}
-        </div>`).join("")}
+          <div><strong>${c.name}</strong><small>${connected && !isGoogle ? "Connected · " : ""}${isGoogle ? `<strong>${esc(title)}</strong> · ${esc(sub)}` : esc(sub)}</small></div>
+          ${btn}
+        </div>`;
+      }).join("")}
     </div>
     <p class="connlist__fine">Google connects Gmail and Calendar. Additional channels can be managed later without changing your drafts.</p>
     <div class="modal__actions"><button class="btn btn--ghost" id="m-close">Done</button></div>`);
@@ -2237,8 +2325,12 @@ function openConnections() {
   };
   $$(".act-connect", modal).forEach((b) =>
     b.addEventListener("click", (e) => {
+      if (b.disabled) return;
       const id = e.target.closest(".connrow").dataset.id;
-      if (id === "google") return connectGoogle();
+      if (id === "google") {
+        if (!getAuthSnapshot().hasRealUser) return startSignInAndConnectGoogle();
+        return connectGoogle();
+      }
       setConn(id, true);
     }));
   $$(".act-disconnect", modal).forEach((b) =>
@@ -2547,7 +2639,7 @@ async function refreshConversation(m, silent = false) {
   if (!user) return false;
   const connections = await refreshConnectionStatus({ silent: true });
   if (!connections.google) {
-    if (!silent) toast("Connect Google to refresh Gmail threads.");
+    if (!silent) connectGoogle();
     return false;
   }
   const hasRefreshReference = Boolean(m.gmailThreadId || m.gmailMessageId || isRealUuid(m.id));
@@ -3459,9 +3551,9 @@ function voiceLearningCardHTML() {
       ` : !auth.hasRealUser ? `
         <div class="voicelearn-status">
           <strong>Sign in to learn your voice.</strong>
-          <small>Your saved profile can appear on this device even when you are not signed in.</small>
+          <small>Sign into Knock first, then connect Google to scan sent mail.</small>
         </div>
-        <button class="btn btn--accent btn--sm" id="voice-signin">Sign in</button>
+        <button class="btn btn--accent btn--sm" id="voice-signin">Sign in &amp; learn my voice</button>
       ` : learned ? `
         <div class="voicelearn-status">
           <strong>Learned from ${count} sent email${count === 1 ? "" : "s"}</strong>
@@ -3482,9 +3574,9 @@ function voiceLearningCardHTML() {
       ` : `
         <div class="voicelearn-status">
           <strong>Connect Google to learn from sent emails.</strong>
-          <small>Scout uses the same Gmail connection it uses to send and refresh threads.</small>
+          <small>Approve Gmail permissions, then Scout can scan sent mail only.</small>
         </div>
-        <button class="btn btn--sm" id="voice-connect">Connect Google</button>
+        <button class="btn btn--sm" id="voice-connect">Connect Google to learn</button>
       `;
   return `
     <div class="pcard voicelearn-card">
@@ -3500,7 +3592,7 @@ async function learnVoiceFromGmail() {
   if (!user) return;
   const connections = await refreshConnectionStatus({ silent: false });
   if (!connections.google) {
-    connectGoogle();
+    startVoiceGoogleConnect();
     return;
   }
   openModal(`
@@ -3617,8 +3709,8 @@ function resetLearnedVoice(fromModal = false) {
 }
 
 function wireVoiceLearningCard() {
-  $("#voice-signin", view)?.addEventListener("click", () => window.knockAuth?.openLogin?.());
-  $("#voice-connect", view)?.addEventListener("click", connectGoogle);
+  $("#voice-signin", view)?.addEventListener("click", startVoiceSignInFlow);
+  $("#voice-connect", view)?.addEventListener("click", startVoiceGoogleConnect);
   $("#voice-learn", view)?.addEventListener("click", learnVoiceFromGmail);
   $("#voice-review", view)?.addEventListener("click", openVoiceReview);
   $("#voice-reset", view)?.addEventListener("click", () => resetLearnedVoice(false));
@@ -4222,6 +4314,70 @@ function renderProfile() {
 /* ============================================================
    SETTINGS
    ============================================================ */
+function googleConnectionCopy() {
+  const s = getAuthSnapshot();
+  if (!s.hasConfig || !s.hasClient || s.mode === "misconfigured") {
+    return {
+      title: "Unavailable",
+      sub: "Add Supabase browser config before connecting Google.",
+      button: "Supabase config missing",
+      disabled: true,
+      disconnect: false,
+    };
+  }
+  if (!s.hasRealUser) {
+    return {
+      title: "Not signed into Knock",
+      sub: "First sign into Knock, then approve Gmail and Calendar permissions.",
+      button: "Sign in & connect Google",
+      disabled: false,
+      disconnect: false,
+    };
+  }
+  if (googleConnected()) {
+    return {
+      title: "Google connected",
+      sub: "Gmail and Calendar are linked for sends, replies, and meetings.",
+      button: "Disconnect",
+      disabled: false,
+      disconnect: true,
+    };
+  }
+  return {
+    title: "Google not connected",
+    sub: "Approve Gmail and Calendar permissions.",
+    button: "Connect Google",
+    disabled: false,
+    disconnect: false,
+  };
+}
+
+function startSignInAndConnectGoogle() {
+  sessionStorage.setItem("knock_after_login", "connect_google");
+  const s = getAuthSnapshot();
+  if (!s.hasConfig || !s.hasClient || s.mode === "misconfigured") {
+    toast("Supabase browser config is missing on this deployment.");
+    return;
+  }
+  window.knockAuth?.openLogin?.();
+}
+
+function startVoiceSignInFlow() {
+  sessionStorage.setItem("knock_after_login", "connect_google");
+  sessionStorage.setItem("knock_after_google_connect", "learn_voice");
+  const s = getAuthSnapshot();
+  if (!s.hasConfig || !s.hasClient || s.mode === "misconfigured") {
+    toast("Supabase browser config is missing on this deployment.");
+    return;
+  }
+  window.knockAuth?.openLogin?.();
+}
+
+function startVoiceGoogleConnect() {
+  sessionStorage.setItem("knock_after_google_connect", "learn_voice");
+  connectGoogle();
+}
+
 function authDiagnosticText() {
   const s = getAuthSnapshot();
   if (s.mode === "dev") return "Auth: Dev mode · Google unavailable";
@@ -4237,16 +4393,25 @@ let settingsConnectionRefreshInFlight = false;
 
 function renderSettings() {
   const auth = getAuthSnapshot();
-  const user = auth.user || { email: "Not signed in", name: "Not signed in" };
+  const user = auth.user || { email: "", name: "" };
   const isDev = auth.mode === "dev";
   const p = state.profile || {};
+  const googleConn = googleConnectionCopy();
+  const accountName = auth.hasRealUser
+    ? (user.name || user.email || "Account")
+    : (p.fullName || user.name || "Your profile");
+  const accountSub = auth.hasRealUser
+    ? `${user.email || ""}${isDev ? " · dev login (configure Supabase for real auth)" : ""}`
+    : "Not signed in · Local profile saved on this device";
   view.innerHTML = `<div class="viewwrap">
     <div class="vh"><h1>Settings</h1><p>How Scout behaves in other people's inboxes.</p></div>
     <div class="settings-grid">
       <div class="pcard">
         <h3>Account</h3>
-        <div class="setrow"><span class="ico">${I.story}</span><div><strong>${esc(user.name || user.email)}</strong><small>${esc(user.email)}${isDev ? " · dev login (configure Supabase for real auth)" : ""}</small></div>
-          <button class="btn btn--paper btn--sm end" id="set-logout">Log out</button></div>
+        <div class="setrow"><span class="ico">${I.story}</span><div><strong>${esc(accountName)}</strong><small>${esc(accountSub)}</small></div>
+          ${auth.hasRealUser
+            ? `<button class="btn btn--paper btn--sm end" id="set-logout">Log out</button>`
+            : `<button class="btn btn--accent btn--sm end" id="set-signin">Sign in</button>`}</div>
         <div class="setrow"><span class="ico">${I.plug}</span><div><strong>Auth status</strong><small id="auth-status-line">${esc(authDiagnosticText())}</small></div></div>
         <div class="setrow"><span class="ico">${I.plug}</span><div><strong>Apollo sourcing</strong><small id="apollo-status">checking…</small></div></div>
         <div class="setrow"><span class="ico">${I.pen}</span><div><strong>Reset my data</strong><small>Clears your profile, doors, and campaigns on this device</small></div>
@@ -4278,13 +4443,10 @@ function renderSettings() {
       </div>
       <div class="pcard">
         <h3>Connections</h3>
-        ${[
-          ["google", "mail", "Google", "Connect Gmail and Calendar to send emails, detect replies, and schedule meetings."],
-        ].map(([id, icn, name, sub]) => `
-        <div class="setrow"><span class="ico">${I[icn]}</span><div><strong>${name}</strong><small>${state.connections[id] ? "Connected · " + sub : "Not connected. " + sub[0].toUpperCase() + sub.slice(1)}</small></div>
-          ${state.connections[id]
-            ? `<button class="btn btn--paper btn--sm end conn-off" data-id="${id}">Disconnect</button>`
-            : `<button class="btn btn--sm end conn-on" data-id="${id}">${id === "google" ? "Connect Google" : "Connect"}</button>`}</div>`).join("")}
+        <div class="setrow"><span class="ico">${I.mail}</span><div><strong>Google</strong><small><strong>${esc(googleConn.title)}</strong> · ${esc(googleConn.sub)}</small></div>
+          ${googleConn.disconnect
+            ? `<button class="btn btn--paper btn--sm end conn-off" data-id="google">Disconnect</button>`
+            : `<button class="btn btn--sm end conn-on" data-id="google"${googleConn.disabled ? " disabled" : ""}>${esc(googleConn.button)}</button>`}</div>
         <div class="setrow"><span class="ico">${I.plug}</span><div><strong>All channels</strong><small>Outlook and more</small></div>
           <button class="btn btn--paper btn--sm end" id="set-connections">Manage</button></div>
         <div class="setrow"><span class="ico">${I.search}</span><div><strong>Connection status</strong><small>Ask the server what is connected for this account</small></div>
@@ -4316,7 +4478,8 @@ function renderSettings() {
   $("#conn-recheck", view)?.addEventListener("click", recheckConnectionStatus);
   wireVoiceLearningCard();
   $("#pro-redeem", view)?.addEventListener("click", redeemProCode);
-  $("#set-logout", view).addEventListener("click", () => window.knockAuth.signOut());
+  $("#set-logout", view)?.addEventListener("click", () => window.knockAuth.signOut());
+  $("#set-signin", view)?.addEventListener("click", () => window.knockAuth?.openLogin?.());
   $("#set-reset", view).addEventListener("click", () => {
     openModal(`
       <h2>Reset your data?</h2>
@@ -4336,7 +4499,12 @@ function renderSettings() {
     });
   });
   $$(".conn-on", view).forEach((b) => b.addEventListener("click", () => {
-    if (b.dataset.id === "google") return connectGoogle();
+    if (b.disabled) return;
+    if (b.dataset.id === "google") {
+      const copy = googleConnectionCopy();
+      if (!getAuthSnapshot().hasRealUser) return startSignInAndConnectGoogle();
+      return connectGoogle();
+    }
   }));
   $$(".conn-off", view).forEach((b) => b.addEventListener("click", () => disconnectProvider(b.dataset.id)));
 
@@ -5164,6 +5332,7 @@ $("#acct-tour")?.addEventListener("click", () => { $("#acct-menu").hidden = true
     /* pull the profile and synced app state back from Supabase before
        deciding on onboarding, so a new device starts with everything */
     await hydrateFromSupabase();
+    await handleAfterLoginAction();
     initAccount();
     navigate();
     refreshConnectionStatus({ silent: true }).then(({ changed } = {}) => {
