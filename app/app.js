@@ -291,6 +291,11 @@ const userId = () => {
   }
   return "dev";
 };
+
+function realAuthUserId() {
+  const id = window.knockAuth?.user?.id;
+  return isRealUuid(id) ? id : null;
+}
 async function realUserIdFromAuth() {
   const auth = window.knockAuth;
   if (isRealUuid(auth?.user?.id)) {
@@ -362,16 +367,17 @@ const MAX_EXTRA_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 state.userFiles = null; /* null = not loaded yet */
 
-const filesApiAvailable = () => userId() !== "dev";
+const filesApiAvailable = () => Boolean(realAuthUserId());
 
 async function loadUserFiles(force = false) {
-  if (!filesApiAvailable()) { state.userFiles = []; return state.userFiles; }
+  const realUserId = await realUserIdFromAuth();
+  if (!realUserId) { state.userFiles = []; return state.userFiles; }
   if (state.userFiles && !force) return state.userFiles;
   try {
     const res = await fetch("/api/files", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: userId(), action: "list" }),
+      body: JSON.stringify({ userId: realUserId, action: "list" }),
     });
     const data = await res.json().catch(() => ({}));
     state.userFiles = data.ok ? data.files || [] : [];
@@ -387,10 +393,8 @@ const userFileById = (id) => (state.userFiles || []).find((f) => f.id === id) ||
 
 async function uploadUserFile(file, kind = "attachment") {
   if (!file) return null;
-  if (!filesApiAvailable()) {
-    toast("Sign in with a real account to store attachments");
-    return null;
-  }
+  const authUser = await requireRealSupabaseAuth("store attachments");
+  if (!authUser) return null;
   if (file.size > MAX_ATTACHMENT_BYTES) {
     toast(`${file.name} is over the 5MB attachment limit`);
     return null;
@@ -400,7 +404,7 @@ async function uploadUserFile(file, kind = "attachment") {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        userId: userId(),
+        userId: authUser.id,
         action: "upload",
         kind,
         name: file.name,
@@ -424,12 +428,13 @@ async function uploadUserFile(file, kind = "attachment") {
 }
 
 async function deleteUserFile(id) {
-  if (!filesApiAvailable()) return false;
+  const authUser = await requireRealSupabaseAuth("store attachments");
+  if (!authUser) return false;
   try {
     const res = await fetch("/api/files", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: userId(), action: "delete", id }),
+      body: JSON.stringify({ userId: authUser.id, action: "delete", id }),
     });
     const data = await res.json().catch(() => ({}));
     if (data.ok) state.userFiles = (state.userFiles || []).filter((f) => f.id !== id);
@@ -681,6 +686,23 @@ async function handleConnectReturn() {
   }
 }
 
+function releaseWaitingGmailMessages() {
+  if (!state.connections.google) return 0;
+  let released = 0;
+  state.messages.forEach((m) => {
+    if (m.status === "waiting_gmail") {
+      m.status = "queued";
+      released++;
+    }
+  });
+  if (released) {
+    saveLive();
+    state.messages.forEach((m) => m.status === "queued" && updateMessageRow(m));
+    processSendQueue();
+  }
+  return released;
+}
+
 async function refreshConnectionStatus({ silent = true } = {}) {
   const s = await waitForAuthReady();
   if (!s.hasRealUser) {
@@ -700,7 +722,9 @@ async function refreshConnectionStatus({ silent = true } = {}) {
     if (res.ok && data.ok) {
       state.connections.google = Boolean(data.connections?.google?.connected || data.connections?.google || data.google);
       saveConnections();
-      return { ...state.connections, changed: before !== Boolean(state.connections.google) };
+      const changed = before !== Boolean(state.connections.google);
+      if (changed && state.connections.google) releaseWaitingGmailMessages();
+      return { ...state.connections, changed };
     }
     if (!silent) toast(data.message || data.error || "Could not check Google connection");
   } catch {
@@ -1672,7 +1696,8 @@ function openAddContact() {
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return obError("#ac-email", "A valid email address is required.");
 
     if (mode() === "import") {
-      if (userId() === "dev") return obError("#ac-email", "Sign in with a real account to import from Gmail.");
+      const authUser = await requireRealSupabaseAuth("import from Gmail");
+      if (!authUser) return obError("#ac-email", "Sign in with a real account to import from Gmail.");
       if (!googleConnected()) return obError("#ac-email", "Connect Google in Settings first so Scout can read the thread.");
       const btn = $("#ac-go", modal);
       btn.disabled = true; btn.textContent = "Searching your Gmail…";
@@ -1680,7 +1705,7 @@ function openAddContact() {
         const res = await fetch("/api/gmail/import-thread", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId: userId(), email, name, company, title }),
+          body: JSON.stringify({ userId: authUser.id, email, name, company, title }),
         });
         const data = await res.json().catch(() => ({}));
         if (res.status === 404 || data.error === "no_thread_found") {
@@ -1974,10 +1999,12 @@ function openLaunchReview(selected) {
 
 async function runLaunch(selected, scheduleAt, oneOffAttachments = [], batchAttachmentIds = []) {
   try {
+    const authUser = await requireRealSupabaseAuth("launch campaigns");
+    if (!authUser) return;
     const res = await fetch("/api/campaigns/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ doors: selected, userId: userId(), sendPrefs: state.sendPrefs, scheduleAt: scheduleAt || undefined }),
+      body: JSON.stringify({ doors: selected, userId: authUser.id, sendPrefs: state.sendPrefs, scheduleAt: scheduleAt || undefined }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Could not queue campaign");
@@ -2038,6 +2065,34 @@ function setMsgStatus(m, status) {
   updateMessageRow(m);
 }
 
+async function fetchGmailSend({ message, scheduleAt } = {}) {
+  const authUser = await requireRealSupabaseAuth("send Gmail");
+  if (!authUser) return null;
+  const realUserId = authUser.id;
+  if (!isRealUuid(realUserId)) {
+    toast("Sign in to Knock before sending Gmail.");
+    return null;
+  }
+  const { userId: _drop, ...messageFields } = message || {};
+  console.log("[gmail/send payload]", {
+    userId: realUserId,
+    messageId: messageFields.id,
+    to: messageFields.to,
+    subject: messageFields.subject,
+  });
+  const res = await fetch("/api/gmail/send", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      userId: realUserId,
+      message: messageFields,
+      scheduleAt,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  return { res, data };
+}
+
 async function processSendQueue() {
   if (sendRunActive) return;
   /* sending preference says hold: knocks stay safely queued on purpose */
@@ -2052,6 +2107,11 @@ async function processSendQueue() {
     let parked = 0;
     state.messages.forEach((m) => { if (m.status === "queued") { m.status = "waiting_gmail"; parked++; } });
     if (parked) { saveLive(); state.messages.forEach((m) => m.status === "waiting_gmail" && updateMessageRow(m)); }
+    return;
+  }
+  const authUser = await requireRealSupabaseAuth("send Gmail");
+  if (!authUser || !isRealUuid(authUser.id)) {
+    if (!realAuthUserId()) toast("Sign in to Knock before sending Gmail.");
     return;
   }
   sendRunActive = true;
@@ -2179,22 +2239,18 @@ async function processSingleSend(m) {
     const savedIds = m.attachmentIds || attachmentIdsForDoor(d);
     const oneOffs = m.attachments || [];
     m.sentAttachments = sentAttachmentMetadata({ ids: savedIds, oneOffs });
-    const res = await fetch("/api/gmail/send", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        userId: userId(),
-        message: {
-          id: m.id, doorId: m.doorId, campaignId: m.campaignId,
-          to: m.to, toName: m.toName || m.name || d?.name || "",
-          subject: noEmDash(m.subject), body: noEmDash(m.body),
-          attachmentIds: savedIds,
-          attachments: oneOffs,
-        },
-        scheduleAt: m.scheduleAt || undefined,
-      }),
+    const sendResult = await fetchGmailSend({
+      message: {
+        id: m.id, doorId: m.doorId, campaignId: m.campaignId,
+        to: m.to, toName: m.toName || m.name || d?.name || "",
+        subject: noEmDash(m.subject), body: noEmDash(m.body),
+        attachmentIds: savedIds,
+        attachments: oneOffs,
+      },
+      scheduleAt: m.scheduleAt || undefined,
     });
-    const data = await res.json().catch(() => ({}));
+    if (!sendResult) return "stop";
+    const { res, data } = sendResult;
     if (res.ok && data.ok) {
       if (data.gmailMessageId) m.gmailMessageId = data.gmailMessageId;
       if (data.gmailThreadId) m.gmailThreadId = data.gmailThreadId;
@@ -2467,11 +2523,13 @@ async function openAttachmentPreview(att) {
     return;
   }
   try {
+    const authUser = await requireRealSupabaseAuth("preview attachments");
+    if (!authUser) throw new Error("Sign in to Knock first.");
     const res = await fetch("/api/gmail/attachment", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        userId: userId(),
+        userId: authUser.id,
         gmailMessageId: att.gmailMessageId || att.messageId,
         attachmentId: att.attachmentId,
         fileName: name,
@@ -2558,13 +2616,14 @@ function normalizeThreadMessages(m) {
 }
 
 async function persistMessageOrg(m) {
-  if (!m || userId() === "dev") return;
+  const realUserId = realAuthUserId();
+  if (!m || !realUserId) return;
   try {
     await fetch("/api/messages/organize", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        userId: userId(),
+        userId: realUserId,
         messageId: m.id,
         archivedAt: m.archivedAt || null,
         deletedAt: m.deletedAt || null,
@@ -2588,12 +2647,14 @@ async function deleteThreadFromKnock(m) {
   updateChrome();
   renderInbox();
 
-  if (userId() === "dev" || !isRealUuid(previousId)) return;
+  if (!isRealUuid(previousId)) return;
+  const realUserId = realAuthUserId();
+  if (!realUserId) return;
   try {
     await fetch("/api/messages/organize", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: userId(), messageId: previousId, action: "delete" }),
+      body: JSON.stringify({ userId: realUserId, messageId: previousId, action: "delete" }),
     });
   } catch { /* local removal already happened */ }
 }
@@ -2726,24 +2787,20 @@ async function sendThreadReply(m, { subject, body, bodyHtml = "", attachments = 
   const safeHtml = bodyHtml ? sanitizeRichHtml(bodyHtml) : "";
   if (!m.to) throw new Error("No verified email found. Apollo enrichment did not return one.");
   if (!replySubject || !replyBody) throw new Error("Reply needs a subject and body.");
-  const res = await fetch("/api/gmail/send", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      userId: userId(),
-      message: {
-        id: m.id, doorId: m.doorId, campaignId: m.campaignId,
-        to: m.to, toName: m.name || d?.name || "",
-        subject: replySubject,
-        body: replyBody,
-        bodyHtml: safeHtml,
-        kind,
-        threadId: m.gmailThreadId,
-        attachments,
-      },
-    }),
+  const sendResult = await fetchGmailSend({
+    message: {
+      id: m.id, doorId: m.doorId, campaignId: m.campaignId,
+      to: m.to, toName: m.name || d?.name || "",
+      subject: replySubject,
+      body: replyBody,
+      bodyHtml: safeHtml,
+      kind,
+      threadId: m.gmailThreadId,
+      attachments,
+    },
   });
-  const data = await res.json().catch(() => ({}));
+  if (!sendResult) throw new Error("Sign in to Knock before sending Gmail.");
+  const { res, data } = sendResult;
   if (res.status === 412 || data.error === "google_not_connected") throw new Error("Google isn't connected");
   if (!res.ok || !data.ok) throw new Error(data.message || data.error || `Send failed (${res.status})`);
   if (data.gmailThreadId) m.gmailThreadId = data.gmailThreadId;
@@ -4631,12 +4688,14 @@ async function redeemProCode() {
   const btn = $("#pro-redeem", view);
   const code = input?.value.trim();
   if (!code) { toast("Enter a license key first"); return; }
+  const authUser = await requireRealSupabaseAuth("redeem a license");
+  if (!authUser) return;
   btn.disabled = true; btn.textContent = "Checking...";
   try {
     const res = await fetch("/api/billing/redeem-code", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: userId(), code }),
+      body: JSON.stringify({ userId: authUser.id, code }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.ok) throw new Error(data.error || `Redeem failed (${res.status})`);

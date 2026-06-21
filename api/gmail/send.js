@@ -153,7 +153,11 @@ export default async function handler(req, res) {
 
   const connection = await getGoogleConnection(userId);
   if (!connection) {
-    return res.status(412).json({ ok: false, error: "google_not_connected" });
+    return res.status(412).json({
+      ok: false,
+      error: "google_not_connected",
+      userIdReceived: userId ? `${userId.slice(0, 8)}...` : null,
+    });
   }
 
   const dbReady = supabaseConfigured();
@@ -277,7 +281,11 @@ export default async function handler(req, res) {
   } catch (err) {
     console.error("Gmail send failed:", err.message);
     if (err.message === "google_not_connected") {
-      return res.status(412).json({ ok: false, error: "google_not_connected" });
+      return res.status(412).json({
+        ok: false,
+        error: "google_not_connected",
+        userIdReceived: userId ? `${userId.slice(0, 8)}...` : null,
+      });
     }
     if (dbReady && validUuid(message.id)) {
       await sbUpdate(
