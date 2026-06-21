@@ -5,7 +5,7 @@
 import { sbDelete, sbUpdate, supabaseConfigured } from "../../lib/supabase/admin.js";
 
 function validUuid(value) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i.test(value || "");
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value || "");
 }
 
 export default async function handler(req, res) {

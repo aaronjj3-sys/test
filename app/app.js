@@ -502,6 +502,15 @@ function toast(html, ms = 3200) {
   t.innerHTML = html;
   $("#toasts").append(t);
   setTimeout(() => { t.style.opacity = 0; t.style.transition = "opacity .3s"; setTimeout(() => t.remove(), 320); }, ms);
+  return t;
+}
+
+function toastConnectGoogle(message = "Connect Google to refresh Gmail threads.") {
+  const t = toast(`${esc(message)} <button class="toast__action" type="button">Connect Google</button>`, 5200);
+  $(".toast__action", t)?.addEventListener("click", () => {
+    t.remove();
+    connectGoogle();
+  });
 }
 
 function renderAppError(err, context = "render") {
@@ -2357,11 +2366,12 @@ function cacheAttachmentPreview(a) {
 }
 
 function previewMarkup(file) {
-  const name = file.fileName || file.filename || file.name || "attachment";
-  const mime = file.mimeType || file.type || file.mime || "application/octet-stream";
-  const content = file.contentBase64 || "";
+  const safeFile = file || {};
+  const name = safeFile.fileName || safeFile.filename || safeFile.name || "attachment";
+  const mime = safeFile.mimeType || safeFile.type || safeFile.mime || "application/octet-stream";
+  const content = String(safeFile.contentBase64 || "").replace(/^data:[^,]+,/i, "");
   if (!content) {
-    return `<div class="preview-empty"><h3>Preview unavailable</h3><p>${esc(name)} can be previewed after Gmail returns the file bytes.</p></div>`;
+    return `<div class="preview-empty"><h3>Preview unavailable</h3><p>${esc(name)} does not have previewable file bytes yet.</p></div>`;
   }
   const src = `data:${mime};base64,${content}`;
   if (/^image\//i.test(mime)) return `<img class="att-preview__image" src="${src}" alt="${esc(name)}">`;
@@ -2375,19 +2385,26 @@ function previewMarkup(file) {
 }
 
 async function openAttachmentPreview(att) {
-  const name = att.fileName || att.filename || att.name || "attachment";
-  const mime = att.mimeType || att.type || att.mime || "application/octet-stream";
+  const file = att || {};
+  const name = file.fileName || file.filename || file.name || "attachment";
+  const mime = file.mimeType || file.type || file.mime || "application/octet-stream";
+  const sizeLabel = formatBytes(file.size || file.sizeBytes);
   openModal(`
     <button class="modal-x" id="att-close" aria-label="Close">&times;</button>
     <h2>Attachment preview</h2>
-    <p class="sub"><b>${esc(name)}</b>${formatBytes(att.size || att.sizeBytes) ? ` · ${esc(formatBytes(att.size || att.sizeBytes))}` : ""} · ${esc(mime)}</p>
+    <p class="sub"><b>${esc(name)}</b>${sizeLabel ? ` · ${esc(sizeLabel)}` : ""} · ${esc(mime)}</p>
     <div class="att-preview" id="att-preview-body">
-      ${att.contentBase64 ? previewMarkup(att) : `<div class="preview-empty"><h3>Loading preview…</h3><p>Fetching the attachment securely from Gmail.</p></div>`}
+      ${file.contentBase64 ? previewMarkup(file) : `<div class="preview-empty"><h3>Loading preview...</h3><p>Fetching the attachment securely from Gmail.</p></div>`}
     </div>`);
   $("#att-close", modal)?.addEventListener("click", closeModal);
-  if (att.contentBase64) return;
-  if (!att.attachmentId || !(att.messageId || att.gmailMessageId)) {
-    $("#att-preview-body", modal).innerHTML = previewMarkup(att);
+  if (file.contentBase64) return;
+  if (!file.attachmentId || !(file.messageId || file.gmailMessageId)) {
+    $("#att-preview-body", modal).innerHTML = `<div class="preview-empty"><h3>Preview unavailable</h3><p>${esc(name)} is missing a Gmail attachment reference.</p></div>`;
+    return;
+  }
+  const realUserId = await realUserIdFromAuth();
+  if (!realUserId) {
+    $("#att-preview-body", modal).innerHTML = `<div class="preview-empty"><h3>Preview unavailable</h3><p>Sign in to Knock first to preview Gmail attachments.</p></div>`;
     return;
   }
   try {
@@ -2395,21 +2412,25 @@ async function openAttachmentPreview(att) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        userId: userId(),
-        gmailMessageId: att.gmailMessageId || att.messageId,
-        attachmentId: att.attachmentId,
+        userId: realUserId,
+        gmailMessageId: file.gmailMessageId || file.messageId,
+        attachmentId: file.attachmentId,
         fileName: name,
         mimeType: mime,
-        size: att.size || att.sizeBytes || 0,
+        size: file.size || file.sizeBytes || 0,
       }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.ok) throw new Error(data.error || "Could not fetch attachment");
-    const file = { ...att, ...data };
-    Object.assign(att, file);
-    $("#att-preview-body", modal).innerHTML = previewMarkup(file);
+    const hydrated = { ...file, ...data };
+    Object.assign(file, hydrated);
+    if (att) Object.assign(att, hydrated);
+    $("#att-preview-body", modal).innerHTML = previewMarkup(hydrated);
   } catch (err) {
-    $("#att-preview-body", modal).innerHTML = `<div class="preview-empty"><h3>Preview unavailable</h3><p>${esc(err.message || "Could not load this attachment.")}</p></div>`;
+    const message = err.message === "google_not_connected"
+      ? "Connect Google to preview Gmail attachments."
+      : err.message || "Could not load this attachment.";
+    $("#att-preview-body", modal).innerHTML = `<div class="preview-empty"><h3>Preview unavailable</h3><p>${esc(message)}</p></div>`;
   }
 }
 
@@ -2481,14 +2502,44 @@ function normalizeThreadMessages(m) {
   return list.filter((tm) => threadBodyText(tm) || tm.subject || (tm.attachments || []).length);
 }
 
+const REFRESH_PENDING_STATUSES = new Set(["drafting", "queued", "paused", "waiting_gmail", "sending"]);
+const REFRESH_GMAIL_STATUSES = new Set(["sent", "scheduled", "followup_sent", "opened", "replied", "needs_review", "meeting"]);
+
+function refreshSkipReason(m) {
+  if (!m) return { reason: "missing", message: "Select a thread to refresh." };
+  if (!googleConnected()) return { reason: "google", message: "Connect Google to refresh Gmail threads." };
+  if (REFRESH_PENDING_STATUSES.has(m.status)) {
+    return { reason: "pending", message: "This knock has not landed in Gmail yet." };
+  }
+  if (!(m.gmailThreadId || m.gmailMessageId || isRealUuid(m.id))) {
+    return { reason: "unsent", message: "This knock has not been sent through Gmail yet." };
+  }
+  if (!REFRESH_GMAIL_STATUSES.has(m.status) && !(m.gmailThreadId || m.gmailMessageId)) {
+    return { reason: "unsent", message: "This knock has not been sent through Gmail yet." };
+  }
+  return null;
+}
+
+function visibleInboxMessages(filter = state.inboxFilter) {
+  return [...state.messages].filter((m) => inboxMatches(m, filter)).sort((a, b) =>
+    (b.unread ? 1 : 0) - (a.unread ? 1 : 0) || threadLastActivity(b) - threadLastActivity(a));
+}
+
+async function realUserIdForOptionalPersist() {
+  const realUserId = await realUserIdFromAuth();
+  return isRealUuid(realUserId) ? realUserId : "";
+}
+
 async function persistMessageOrg(m) {
-  if (!m || userId() === "dev") return;
+  if (!m || !isRealUuid(m.id)) return;
+  const realUserId = await realUserIdForOptionalPersist();
+  if (!realUserId) return;
   try {
     await fetch("/api/messages/organize", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        userId: userId(),
+        userId: realUserId,
         messageId: m.id,
         archivedAt: m.archivedAt || null,
         deletedAt: m.deletedAt || null,
@@ -2501,23 +2552,30 @@ async function persistMessageOrg(m) {
 async function deleteThreadFromKnock(m) {
   if (!m) return;
   const previousId = m.id;
+  const before = visibleInboxMessages();
+  const previousIndex = before.findIndex((x) => x.id === previousId);
   state.messages = state.messages.filter((x) => x.id !== previousId);
   for (const c of state.campaigns) {
     c.selectedDoorIds = (c.selectedDoorIds || []).filter((id) => id !== m.doorId);
   }
   state.campaigns = state.campaigns.filter((c) => (c.selectedDoorIds || []).length > 0);
-  if (state.inboxSelectedId === previousId) state.inboxSelectedId = null;
+  if (state.inboxSelectedId === previousId) {
+    const after = visibleInboxMessages();
+    state.inboxSelectedId = after[Math.min(previousIndex, Math.max(0, after.length - 1))]?.id || null;
+  }
   save("knock_inbox_selected", state.inboxSelectedId);
   saveLive();
   updateChrome();
   renderInbox();
 
-  if (userId() === "dev" || !isRealUuid(previousId)) return;
+  if (!isRealUuid(previousId)) return;
+  const realUserId = await realUserIdForOptionalPersist();
+  if (!realUserId) return;
   try {
     await fetch("/api/messages/organize", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: userId(), messageId: previousId, action: "delete" }),
+      body: JSON.stringify({ userId: realUserId, messageId: previousId, action: "delete" }),
     });
   } catch { /* local removal already happened */ }
 }
@@ -2555,18 +2613,24 @@ function applyThreadRefresh(m, data) {
 }
 
 async function refreshConversation(m, silent = false) {
-  if (!m) {
-    if (!silent) toast("Select a thread to refresh");
+  const skip = refreshSkipReason(m);
+  if (skip) {
+    if (!silent) {
+      if (skip.reason === "google") toastConnectGoogle(skip.message);
+      else toast(skip.message);
+    }
+    if (skip.reason !== "missing") {
+      console.log("[refresh-thread skipped]", {
+        reason: skip.reason,
+        messageId: m?.id || null,
+        status: m?.status || null,
+      });
+    }
     return false;
   }
   const realUserId = await realUserIdFromAuth();
   if (!realUserId) {
-    if (!silent) toast("Sign in with Google to refresh Gmail threads");
-    return false;
-  }
-  const hasRefreshReference = Boolean(m.gmailThreadId || m.gmailMessageId || isRealUuid(m.id));
-  if (!hasRefreshReference) {
-    if (!silent) toast(googleConnected() ? "This knock has not been sent through Gmail yet" : "Connect Google to refresh Gmail threads");
+    if (!silent) toast("Sign in to Knock first to refresh Gmail threads.");
     return false;
   }
   try {
@@ -2583,20 +2647,25 @@ async function refreshConversation(m, silent = false) {
       }),
     });
     const data = await res.json().catch(() => ({}));
-    if (data.error === "real_user_required") throw new Error(data.message || "Sign in with Google to refresh Gmail threads");
-    if (res.status === 412 || data.error === "google_not_connected") throw new Error("Google is not connected");
-    if (data.error === "missing_thread_reference") throw new Error(data.message || "This thread is not tracked by Gmail yet");
-    if (data.error === "missing_gmail_thread_id") throw new Error("This knock has not been sent through Gmail yet");
+    if (data.error === "real_user_required") throw new Error(data.message || "Sign in to Knock first to refresh Gmail threads.");
+    if (res.status === 412 || data.error === "google_not_connected") {
+      if (!silent) toastConnectGoogle("Connect Google to refresh Gmail threads.");
+      return false;
+    }
+    if ([400, 409].includes(res.status) || data.error === "missing_thread_reference" || data.error === "missing_gmail_thread_id") {
+      if (!silent) toast(data.message || "This knock has not been sent through Gmail yet.");
+      return false;
+    }
     if (!res.ok || !data.ok) throw new Error(data.message || data.error || `Refresh failed (${res.status})`);
     applyThreadRefresh(m, data);
     saveLive();
     if ((location.hash.replace("#", "") || "dashboard") === "inbox") {
       updateInboxThread(m, { forceBottom: !silent });
     }
-    if (!silent) toast("Conversation refreshed from Gmail");
+    if (!silent) toast("Thread refreshed.");
     return true;
   } catch (err) {
-    if (!silent) toast(`Could not refresh: ${esc(err.message)}`);
+    if (!silent) toast(`Could not refresh thread: ${esc(err.message)}`);
     return false;
   }
 }
@@ -2648,6 +2717,10 @@ async function sendThreadReply(m, { subject, body, bodyHtml = "", attachments = 
   const safeHtml = bodyHtml ? sanitizeRichHtml(bodyHtml) : "";
   if (!m.to) throw new Error("No verified email found. Apollo enrichment did not return one.");
   if (!replySubject || !replyBody) throw new Error("Reply needs a subject and body.");
+  if (!googleConnected()) {
+    toastConnectGoogle("Connect Google to send replies.");
+    return null;
+  }
   const realUserId = await requireRealUserId("send Gmail");
   if (!realUserId) return null;
   const message = {
@@ -2728,6 +2801,93 @@ function threadMessagesHTML(m) {
     ${m?.suggestedReply ? `<div class="msg msg--draft"><time>Scout draft</time><b>${esc(m.suggestedReply.subject || "")}</b><div class="msg__body">${esc(m.suggestedReply.body || "")}</div></div>` : ""}`;
 }
 
+function inboxStateInfo(m) {
+  if (!m) return { tone: "idle", title: "Select a thread.", body: "Choose a conversation from the left." };
+  if (m.status === "waiting_gmail") {
+    return {
+      tone: "gmail",
+      title: "Connect Google to send this knock.",
+      body: "It is parked safely until Gmail is connected.",
+      action: "connect",
+      actionLabel: "Connect Google",
+    };
+  }
+  if (m.status === "queued" || m.status === "paused" || m.status === "scheduled") {
+    return {
+      tone: "queued",
+      title: m.status === "scheduled" ? "Scheduled to send." : "Queued to send.",
+      body: m.status === "paused" ? "Paused for now. Resume it from Tracker when you are ready." : "Scout will send it when the queue reaches this knock.",
+    };
+  }
+  if (m.status === "drafting" || m.status === "sending") {
+    return { tone: "sending", title: "Sending from Gmail...", body: "Scout is preparing or delivering this knock now." };
+  }
+  if (m.status === "sent" || m.status === "opened") {
+    return { tone: "sent", title: "Sent. Waiting for reply.", body: "This thread is live in Gmail and ready to refresh." };
+  }
+  if (m.status === "followup_sent") {
+    return { tone: "sent", title: "Follow-up sent. Waiting for reply.", body: "Scout is watching this Gmail thread for a response." };
+  }
+  if (m.status === "needs_review") {
+    return {
+      tone: "review",
+      title: "Reply ready for review.",
+      body: "Scout drafted a response. Review it before sending.",
+      action: "reply",
+      actionLabel: "Review reply",
+    };
+  }
+  if (m.status === "replied") {
+    return {
+      tone: "replied",
+      title: m.suggestedReply && !m.replySent ? "Reply received. Draft ready." : "Reply received.",
+      body: m.suggestedReply && !m.replySent ? "Review Scout's draft or write your own reply below." : "The conversation is warm. Keep it moving from here.",
+      action: m.suggestedReply && !m.replySent ? "reply" : "",
+      actionLabel: "Review reply",
+    };
+  }
+  if (m.status === "failed") {
+    return {
+      tone: "failed",
+      title: "Send failed.",
+      body: m.error || "Retry from here or open Tracker for more context.",
+      action: "retry",
+      actionLabel: "Retry send",
+    };
+  }
+  return { tone: "idle", title: STATUS_UI[m.status]?.[0] || "Thread status", body: "This thread is tracked in Knock." };
+}
+
+function inboxStateHTML(m) {
+  const info = inboxStateInfo(m);
+  return `<div class="threadstate threadstate--${esc(info.tone)}">
+    <div><strong>${esc(info.title)}</strong><small>${esc(info.body)}</small></div>
+    ${info.action ? `<button class="btn btn--sm ${info.action === "connect" || info.action === "retry" ? "btn--accent" : "btn--paper"} threadstate-action" data-action="${esc(info.action)}" data-id="${esc(m?.id || "")}">${esc(info.actionLabel)}</button>` : ""}
+  </div>`;
+}
+
+function retryMessageSend(m) {
+  if (!m) return;
+  m.status = "queued";
+  m.error = null;
+  m.updatedAt = new Date().toISOString();
+  saveLive();
+  updateMessageRow(m);
+  updateInboxThread(m);
+  toast("Retrying that knock");
+  processSendQueue();
+}
+
+function wireInboxStateActions(root = view, m = null) {
+  $$(".threadstate-action", root).forEach((b) => b.addEventListener("click", () => {
+    const msg = m || msgById(b.dataset.id);
+    if (!msg) return;
+    if (b.dataset.action === "connect") return connectGoogle();
+    if (b.dataset.action === "retry") return retryMessageSend(msg);
+    if (b.dataset.action === "reply") return openSuggestedReply(msg);
+  }));
+}
+
 function threadListItemHTML(m, selectedId = state.inboxSelectedId) {
   return `<button class="thread-item ${selectedId === m.id ? "is-open" : ""} ${m.unread ? "is-new" : ""}" data-id="${m.id}">
     <span class="thread-item__row">
@@ -2795,6 +2955,13 @@ function updateInboxThread(m, opts = {}) {
   $("small", head).textContent = `${m.name || ""}${m.company ? " - " + m.company : ""}${m.to ? " - " + m.to : ""}`;
   $(".thread-flag", head).textContent = m.flagged ? "Unflag" : "Flag";
   $(".thread-archive", head).textContent = m.archivedAt ? "Unarchive" : "Archive";
+  const statePanel = $(".threadstate", view);
+  if (statePanel) {
+    const holder = document.createElement("div");
+    holder.innerHTML = inboxStateHTML(m);
+    statePanel.replaceWith(holder.firstElementChild);
+    wireInboxStateActions(view, m);
+  }
   renderThreadMessagesOnly(m, opts);
   const replyActions = $(".threadview__reply", view);
   if (replyActions) {
@@ -2933,7 +3100,7 @@ function wireReplyComposer(m) {
         return;
       }
       inboxComposerAttachments.delete(m.id);
-      toast("Reply sent. Knock is watching the thread");
+      toast("Reply sent.");
       updateInboxThread(m, { forceBottom: true });
     } catch (err) {
       btn.disabled = false; btn.textContent = "Send reply";
@@ -2948,8 +3115,7 @@ function renderInbox() {
     save("knock_inbox_filter", state.inboxFilter);
   }
   /* new replies first (lighted blue), then most recent activity downward */
-  let messages = [...state.messages].filter((m) => inboxMatches(m)).sort((a, b) =>
-    (b.unread ? 1 : 0) - (a.unread ? 1 : 0) || threadLastActivity(b) - threadLastActivity(a));
+  let messages = visibleInboxMessages();
   const selected = messages.find((m) => m.id === state.inboxSelectedId) || messages[0];
   if (selected) {
     state.inboxSelectedId = selected.id;
@@ -2987,6 +3153,7 @@ function renderInbox() {
             <button class="btn btn--paper btn--sm thread-delete" data-id="${selected?.id || ""}">Delete</button>
           </div>
         </div>
+        ${inboxStateHTML(selected)}
         <div class="threadview__msgs">
           ${threadMessagesHTML(selected)}
         </div>
@@ -3031,6 +3198,7 @@ function renderInbox() {
   /* opening the selected thread clears its unread highlight */
   if (selected?.unread) { selected.unread = false; saveLive(); }
   $(".msg-reply", view)?.addEventListener("click", (e) => openSuggestedReply(msgById(e.target.dataset.id)));
+  wireInboxStateActions(view, selected);
   wireAttachmentPreviewButtons(view);
   $("#open-tracker", view)?.addEventListener("click", () => { location.hash = "tracker"; });
   $("#inbox-cta", view)?.addEventListener("click", () => { location.hash = "dashboard"; });
@@ -3045,11 +3213,18 @@ function renderInbox() {
   });
   $(".thread-flag", view)?.addEventListener("click", () => {
     selected.flagged = !selected.flagged;
-    saveLive(); persistMessageOrg(selected); renderInbox();
+    selected.updatedAt = new Date().toISOString();
+    saveLive();
+    persistMessageOrg(selected);
+    updateInboxThread(selected);
   });
   $(".thread-archive", view)?.addEventListener("click", () => {
     selected.archivedAt = selected.archivedAt ? null : new Date().toISOString();
-    saveLive(); persistMessageOrg(selected); renderInbox();
+    selected.updatedAt = new Date().toISOString();
+    saveLive();
+    persistMessageOrg(selected);
+    if (inboxMatches(selected)) updateInboxThread(selected);
+    else renderInbox();
   });
   $(".thread-delete", view)?.addEventListener("click", () => {
     openModal(`
@@ -3099,8 +3274,11 @@ function messageActions(m) {
   return "";
 }
 
-/* statuses with a real conversation behind them open in the inbox on click */
-const TRACKER_LINKABLE = new Set(["sent", "followup_sent", "opened", "replied", "needs_review", "meeting", "scheduled"]);
+/* Every tracked knock can open in Inbox; pending rows show delivery state there. */
+const TRACKER_LINKABLE = new Set([
+  "drafting", "queued", "paused", "waiting_gmail", "sending", "failed",
+  "sent", "followup_sent", "opened", "replied", "needs_review", "meeting", "scheduled",
+]);
 
 function trackerRow(m) {
   const linkable = TRACKER_LINKABLE.has(m.status);
@@ -3258,7 +3436,7 @@ function openSuggestedReply(m) {
         return;
       }
       closeModal();
-      toast("Reply sent. Scout keeps watching the thread");
+      toast("Reply sent.");
       if ((location.hash.replace("#", "") || "dashboard") === "inbox") updateInboxThread(m, { forceBottom: true });
     } catch (err) {
       btn.disabled = false; btn.textContent = "Send reply";

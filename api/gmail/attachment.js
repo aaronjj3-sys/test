@@ -8,7 +8,7 @@ import { getAttachment } from "../../lib/gmail/client.js";
 const MAX_PREVIEW_BYTES = 6 * 1024 * 1024;
 
 function validUuid(value) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i.test(value || "");
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value || "");
 }
 
 export default async function handler(req, res) {
