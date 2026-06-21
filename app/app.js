@@ -296,30 +296,62 @@ function realAuthUserId() {
   const id = window.knockAuth?.user?.id;
   return isRealUuid(id) ? id : null;
 }
-async function realUserIdFromAuth() {
-  const auth = window.knockAuth;
-  if (isRealUuid(auth?.user?.id)) {
-    rememberActiveUserId(auth.user.id);
-    return auth.user.id;
-  }
-  if (!auth?.client) return "";
+function syncKnockUserFromSupabaseUser(sessionUser) {
+  if (!sessionUser?.id || !isRealUuid(sessionUser.id)) return null;
+  const name = sessionUser.user_metadata?.full_name || sessionUser.email || "";
+  const user = {
+    id: sessionUser.id,
+    email: sessionUser.email || "",
+    name,
+    avatar: sessionUser.user_metadata?.avatar_url,
+    initials: name.split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((p) => p[0].toUpperCase()).join(""),
+  };
+  if (window.knockAuth) window.knockAuth.user = user;
+  rememberActiveUserId(user.id);
+  return user;
+}
+
+async function getLiveAuthUser() {
   try {
-    const { data } = await auth.client.auth.getUser();
-    if (isRealUuid(data?.user?.id)) {
-      const name = data.user.user_metadata?.full_name || data.user.email || auth.user?.name || "";
-      auth.user = {
-        ...(auth.user || {}),
-        id: data.user.id,
-        email: data.user.email || auth.user?.email || "",
-        name,
-        avatar: data.user.user_metadata?.avatar_url || auth.user?.avatar,
-        initials: (name || data.user.email || "?").split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((p) => p[0].toUpperCase()).join(""),
-      };
-      rememberActiveUserId(data.user.id);
-      return data.user.id;
+    if (window.knockAuth?.ready) await window.knockAuth.ready;
+  } catch { /* login UI handles auth errors */ }
+
+  let user = window.knockAuth?.user || null;
+  if (isRealUuid(user?.id)) {
+    rememberActiveUserId(user.id);
+    return user;
+  }
+
+  if (window.knockAuth?.client?.auth?.getSession) {
+    try {
+      const { data } = await window.knockAuth.client.auth.getSession();
+      if (data?.session?.user?.id) {
+        user = syncKnockUserFromSupabaseUser(data.session.user);
+        if (user) return user;
+      }
+    } catch (err) {
+      console.warn("[auth] getLiveAuthUser failed", err?.message || err);
     }
-  } catch { /* session refresh failed; caller shows a clean login prompt */ }
-  return "";
+  }
+
+  if (window.knockAuth?.client?.auth?.getUser) {
+    try {
+      const { data } = await window.knockAuth.client.auth.getUser();
+      if (data?.user?.id) {
+        user = syncKnockUserFromSupabaseUser(data.user);
+        if (user) return user;
+      }
+    } catch (err) {
+      console.warn("[auth] getLiveAuthUser getUser failed", err?.message || err);
+    }
+  }
+
+  return null;
+}
+
+async function realUserIdFromAuth() {
+  const user = await getLiveAuthUser();
+  return user?.id || "";
 }
 
 function getAuthSnapshot() {
@@ -333,23 +365,22 @@ function getAuthSnapshot() {
 }
 
 async function waitForAuthReady() {
-  try {
-    if (window.knockAuth?.ready) await window.knockAuth.ready;
-  } catch { /* login UI handles auth errors */ }
-  await realUserIdFromAuth();
-  return getAuthSnapshot();
+  const user = await getLiveAuthUser();
+  const snapshot = getAuthSnapshot();
+  return { ...snapshot, user: user || snapshot.user, hasRealUser: Boolean(user) };
 }
 
 let connectCallbackHandled = false;
 
 async function requireRealSupabaseAuth(reason = "continue", options = {}) {
-  const s = await waitForAuthReady();
-  if (s.hasRealUser) return s.user;
+  const user = await getLiveAuthUser();
+  if (user) return user;
 
   if (options.afterLogin) {
     sessionStorage.setItem("knock_after_login", options.afterLogin);
   }
 
+  const s = getAuthSnapshot();
   if (!s.hasConfig || !s.hasClient || s.mode === "misconfigured") {
     toast("Supabase browser config is missing on this deployment.");
     return null;
@@ -585,6 +616,14 @@ function renderSettingsIfCurrent() {
   if ((location.hash.replace("#", "") || "dashboard") === "settings") renderSettings();
 }
 
+function refreshVisibleConnectionUI() {
+  renderSettingsIfCurrent();
+  refreshSendStrip();
+  updateChrome();
+  const route = location.hash.replace("#", "") || "dashboard";
+  if (["inbox", "dashboard", "tracker", "settings"].includes(route)) navigate();
+}
+
 const GOOGLE_CONNECT_ERRORS = {
   real_user_required: "Sign in to Knock before connecting Google.",
   missing_supabase_user: "Sign in to Knock before connecting Google.",
@@ -597,18 +636,26 @@ const GOOGLE_CONNECT_ERRORS = {
 };
 
 async function connectGoogle() {
+  console.log("[action]", "connect-google");
   const user = await requireRealSupabaseAuth("connect Google", {
     afterLogin: "connect_google",
   });
   if (!user) return;
 
-  await refreshConnectionStatus({ silent: true });
+  console.log("[connectGoogle live user]", {
+    userId: user.id,
+    email: user.email,
+    authMode: window.knockAuth?.mode,
+  });
 
-  if (state.connections.google) {
+  const status = await refreshConnectionStatus({ silent: true, rerender: false });
+
+  if (status?.google || state.connections?.google) {
     sessionStorage.removeItem("knock_google_connecting");
     sessionStorage.removeItem("knock_after_login");
     toast("Google is already connected.");
-    renderSettingsIfCurrent();
+    releaseWaitingGmailMessages();
+    refreshVisibleConnectionUI();
     return;
   }
 
@@ -632,8 +679,8 @@ async function handleAfterLoginAction() {
     return;
   }
 
-  const s = await waitForAuthReady();
-  if (!s.hasRealUser) return;
+  const user = await getLiveAuthUser();
+  if (!user) return;
 
   const url = new URL(location.href);
   if (url.searchParams.get("google") || url.searchParams.get("google_error")) return;
@@ -642,11 +689,11 @@ async function handleAfterLoginAction() {
   sessionStorage.removeItem("knock_google_connecting");
 
   if (action === "connect_google") {
-    await refreshConnectionStatus({ silent: true });
+    const status = await refreshConnectionStatus({ silent: true, rerender: false });
 
-    if (state.connections.google) {
+    if (status?.google || state.connections?.google) {
       toast("Google is already connected.");
-      renderSettingsIfCurrent();
+      refreshVisibleConnectionUI();
       return;
     }
 
@@ -655,35 +702,36 @@ async function handleAfterLoginAction() {
 }
 
 async function handleConnectReturn() {
-  const url = new URL(location.href);
-  let touched = false;
-  for (const provider of ["google"]) {
-    const connected = url.searchParams.get(provider) === "connected";
-    const error = url.searchParams.get(`${provider}_error`);
-    if (!connected && !error) continue;
+  const params = new URLSearchParams(location.search || "");
+  const googleConnectedParam = params.get("google") === "connected";
+  const googleError = params.get("google_error") || params.get("error");
 
-    sessionStorage.removeItem("knock_google_connecting");
-    touched = true;
-    if (isRealUuid(window.knockAuth?.user?.id)) rememberActiveUserId(window.knockAuth.user.id);
-    await refreshConnectionStatus({ silent: true });
+  if (!googleConnectedParam && !googleError) return;
 
-    if (connected) {
-      toast("Google connected.");
-      const pendingVoice = sessionStorage.getItem("knock_after_google_connect");
-      if (pendingVoice === "learn_voice") {
-        sessionStorage.removeItem("knock_after_google_connect");
-        toast("Google connected. Tap Learn from Gmail when you are ready.");
-      }
-    } else {
-      toast(GOOGLE_CONNECT_ERRORS[error] || `Google connect failed: ${String(error || "unknown_error").replace(/_/g, " ")}`);
+  sessionStorage.removeItem("knock_google_connecting");
+  connectCallbackHandled = true;
+  sessionStorage.removeItem("knock_after_login");
+
+  if (googleError) {
+    toast(GOOGLE_CONNECT_ERRORS[googleError] || `Google connect failed: ${String(googleError).replace(/_/g, " ")}`);
+  }
+
+  await getLiveAuthUser();
+  const status = await refreshConnectionStatus({ silent: true, rerender: true });
+
+  if (googleConnectedParam || status?.google) {
+    state.connections.google = true;
+    saveConnections();
+    const pendingVoice = sessionStorage.getItem("knock_after_google_connect");
+    if (pendingVoice === "learn_voice") {
+      sessionStorage.removeItem("knock_after_google_connect");
     }
+    releaseWaitingGmailMessages();
+    toast("Google connected.");
+    refreshVisibleConnectionUI();
   }
-  if (touched) {
-    connectCallbackHandled = true;
-    sessionStorage.removeItem("knock_after_login");
-    history.replaceState(null, "", `${location.pathname}${location.hash || "#settings"}`);
-    renderSettingsIfCurrent();
-  }
+
+  history.replaceState(null, "", `${location.pathname}${location.hash || "#settings"}`);
 }
 
 function releaseWaitingGmailMessages() {
@@ -703,58 +751,53 @@ function releaseWaitingGmailMessages() {
   return released;
 }
 
-async function refreshConnectionStatus({ silent = true } = {}) {
-  const s = await waitForAuthReady();
-  if (!s.hasRealUser) {
+async function refreshConnectionStatus({ silent = true, rerender = false } = {}) {
+  const user = await getLiveAuthUser();
+
+  if (!user) {
     const changed = Boolean(state.connections.google);
     state.connections.google = false;
     saveConnections();
-    return { ...state.connections, changed };
+    if (rerender) refreshVisibleConnectionUI();
+    return { ok: false, google: false, reason: "not_signed_in", changed };
   }
+
   try {
     const before = Boolean(state.connections.google);
     const res = await fetch("/api/connections/status", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: s.user.id }),
+      body: JSON.stringify({ userId: user.id }),
     });
     const data = await res.json().catch(() => ({}));
-    if (res.ok && data.ok) {
-      state.connections.google = Boolean(data.connections?.google?.connected || data.connections?.google || data.google);
-      saveConnections();
-      const changed = before !== Boolean(state.connections.google);
-      if (changed && state.connections.google) releaseWaitingGmailMessages();
-      return { ...state.connections, changed };
+
+    if (!res.ok || data.ok === false) {
+      if (!silent) toast(data.message || data.error || "Could not check Google connection");
+      return { ok: false, google: false, raw: data, changed: false };
     }
-    if (!silent) toast(data.message || data.error || "Could not check Google connection");
+
+    const google = Boolean(data.google || data.connections?.google?.connected || data.connections?.google || data.connections?.gmail);
+    state.connections = { ...(state.connections || {}), google };
+    saveConnections();
+
+    const changed = before !== google;
+    if (google) releaseWaitingGmailMessages();
+    if (rerender || changed) refreshVisibleConnectionUI();
+
+    return { ok: true, google, raw: data, changed };
   } catch {
     if (!silent) toast("Could not check Google connection");
+    return { ok: false, google: Boolean(state.connections.google), changed: false };
   }
-  return { ...state.connections, changed: false };
 }
 
 async function recheckConnectionStatus() {
-  const auth = window.knockAuth;
+  console.log("[action]", "recheck-connection");
   try {
-    if (auth?.ready) await auth.ready;
-    if (auth?.client) {
-      const { data } = await auth.client.auth.getSession();
-      const sessionUser = data?.session?.user;
-      if (sessionUser?.id) {
-        const name = sessionUser.user_metadata?.full_name || sessionUser.email || auth.user?.name || "";
-        auth.user = {
-          ...(auth.user || {}),
-          id: sessionUser.id,
-          email: sessionUser.email || auth.user?.email || "",
-          name,
-          avatar: sessionUser.user_metadata?.avatar_url || auth.user?.avatar,
-          initials: (name || sessionUser.email || "?").split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((p) => p[0].toUpperCase()).join(""),
-        };
-        rememberActiveUserId(sessionUser.id);
-      }
-    }
-    await refreshConnectionStatus({ silent: false });
-    toast("Connection status refreshed");
+    await getLiveAuthUser();
+    const status = await refreshConnectionStatus({ silent: false, rerender: true });
+    if (status?.ok) toast("Connection status refreshed");
+    else toast("Could not refresh connection status");
     renderSettings();
   } catch {
     toast("Could not refresh connection status");
@@ -1443,7 +1486,10 @@ function wireSendStrip() {
   if (!strip || strip.dataset.wired) return;
   strip.dataset.wired = "1";
   strip.addEventListener("click", (e) => {
-    if (e.target.closest("#ss-google")) return connectGoogle();
+    if (e.target.closest("#ss-google")) {
+      console.log("[action]", "dashboard-connect-google");
+      return connectGoogle();
+    }
     if (e.target.closest("#ss-upgrade")) return openUpgrade();
     if (e.target.closest("#ss-dismiss")) return dismissSendStrip();
     /* following the CTA acknowledges the notice: hide it until news arrives */
@@ -2111,7 +2157,7 @@ async function processSendQueue() {
   }
   const authUser = await requireRealSupabaseAuth("send Gmail");
   if (!authUser || !isRealUuid(authUser.id)) {
-    if (!realAuthUserId()) toast("Sign in to Knock before sending Gmail.");
+    toast("Sign in to Knock before sending Gmail.");
     return;
   }
   sendRunActive = true;
@@ -2383,10 +2429,7 @@ function openConnections() {
     b.addEventListener("click", (e) => {
       if (b.disabled) return;
       const id = e.target.closest(".connrow").dataset.id;
-      if (id === "google") {
-        if (!getAuthSnapshot().hasRealUser) return startSignInAndConnectGoogle();
-        return connectGoogle();
-      }
+      if (id === "google") return connectGoogle();
       setConn(id, true);
     }));
   $$(".act-disconnect", modal).forEach((b) =>
@@ -3332,6 +3375,7 @@ function renderTracker() {
       toast("Retrying that knock");
       processSendQueue();
     } else if (btn.classList.contains("msg-connect")) {
+      console.log("[action]", "inbox-connect-google");
       connectGoogle();
     } else if (btn.classList.contains("msg-reply")) {
       openSuggestedReply(m);
@@ -3766,9 +3810,12 @@ function resetLearnedVoice(fromModal = false) {
 }
 
 function wireVoiceLearningCard() {
-  $("#voice-signin", view)?.addEventListener("click", startVoiceSignInFlow);
-  $("#voice-connect", view)?.addEventListener("click", startVoiceGoogleConnect);
-  $("#voice-learn", view)?.addEventListener("click", learnVoiceFromGmail);
+  $("#voice-signin", view)?.addEventListener("click", () => startVoiceSignInFlow());
+  $("#voice-connect", view)?.addEventListener("click", () => startVoiceGoogleConnect());
+  $("#voice-learn", view)?.addEventListener("click", () => {
+    console.log("[action]", "learn-from-gmail");
+    learnVoiceFromGmail();
+  });
   $("#voice-review", view)?.addEventListener("click", openVoiceReview);
   $("#voice-reset", view)?.addEventListener("click", () => resetLearnedVoice(false));
 }
@@ -4410,16 +4457,17 @@ function googleConnectionCopy() {
 }
 
 function startSignInAndConnectGoogle() {
-  sessionStorage.setItem("knock_after_login", "connect_google");
-  const s = getAuthSnapshot();
-  if (!s.hasConfig || !s.hasClient || s.mode === "misconfigured") {
-    toast("Supabase browser config is missing on this deployment.");
-    return;
-  }
-  window.knockAuth?.openLogin?.();
+  console.log("[action]", "sign-in-connect-google");
+  return connectGoogle();
 }
 
-function startVoiceSignInFlow() {
+async function startVoiceSignInFlow() {
+  console.log("[action]", "sign-in-learn-voice");
+  const user = await getLiveAuthUser();
+  if (user) {
+    sessionStorage.setItem("knock_after_google_connect", "learn_voice");
+    return connectGoogle();
+  }
   sessionStorage.setItem("knock_after_login", "connect_google");
   sessionStorage.setItem("knock_after_google_connect", "learn_voice");
   const s = getAuthSnapshot();
@@ -4431,6 +4479,7 @@ function startVoiceSignInFlow() {
 }
 
 function startVoiceGoogleConnect() {
+  console.log("[action]", "connect-google-learn-voice");
   sessionStorage.setItem("knock_after_google_connect", "learn_voice");
   connectGoogle();
 }
@@ -4536,7 +4585,12 @@ function renderSettings() {
   wireVoiceLearningCard();
   $("#pro-redeem", view)?.addEventListener("click", redeemProCode);
   $("#set-logout", view)?.addEventListener("click", () => window.knockAuth.signOut());
-  $("#set-signin", view)?.addEventListener("click", () => window.knockAuth?.openLogin?.());
+  $("#set-signin", view)?.addEventListener("click", async () => {
+    console.log("[action]", "sign-in");
+    const user = await getLiveAuthUser();
+    if (user) return connectGoogle();
+    window.knockAuth?.openLogin?.();
+  });
   $("#set-reset", view).addEventListener("click", () => {
     openModal(`
       <h2>Reset your data?</h2>
@@ -4557,23 +4611,16 @@ function renderSettings() {
   });
   $$(".conn-on", view).forEach((b) => b.addEventListener("click", () => {
     if (b.disabled) return;
-    if (b.dataset.id === "google") {
-      const copy = googleConnectionCopy();
-      if (!getAuthSnapshot().hasRealUser) return startSignInAndConnectGoogle();
-      return connectGoogle();
-    }
+    if (b.dataset.id === "google") connectGoogle();
   }));
   $$(".conn-off", view).forEach((b) => b.addEventListener("click", () => disconnectProvider(b.dataset.id)));
 
   if (!settingsConnectionRefreshInFlight) {
     settingsConnectionRefreshInFlight = true;
-    refreshConnectionStatus({ silent: true }).then(({ changed } = {}) => {
+    refreshConnectionStatus({ silent: true, rerender: true }).then(() => {
       settingsConnectionRefreshInFlight = false;
-      if (changed && (location.hash.replace("#", "") || "dashboard") === "settings") renderSettings();
-      else {
-        const line = $("#auth-status-line", view);
-        if (line) line.textContent = authDiagnosticText();
-      }
+      const line = $("#auth-status-line", view);
+      if (line) line.textContent = authDiagnosticText();
     }).catch(() => {
       settingsConnectionRefreshInFlight = false;
     });
@@ -5376,7 +5423,7 @@ $("#acct-tour")?.addEventListener("click", () => { $("#acct-menu").hidden = true
       <div class="ghost__icon ghost__icon--spin">${I.spark}</div>
       <h2>Opening your doors…</h2>
     </div></div>`;
-    const user = await window.knockAuth?.ready;
+    const user = await getLiveAuthUser();
     if (!user) {
       /* genuinely no session anywhere: back to the landing login */
       location.replace("/#login");
@@ -5386,7 +5433,7 @@ $("#acct-tour")?.addEventListener("click", () => { $("#acct-menu").hidden = true
     if (/access_token|refresh_token|error_description/.test(location.hash)) {
       history.replaceState(null, "", location.pathname + "#dashboard");
     }
-    if (isRealUuid(user.id)) rememberActiveUserId(user.id);
+    rememberActiveUserId(user.id);
     await handleConnectReturn();
     /* pull the profile and synced app state back from Supabase before
        deciding on onboarding, so a new device starts with everything */
@@ -5394,9 +5441,7 @@ $("#acct-tour")?.addEventListener("click", () => { $("#acct-menu").hidden = true
     await handleAfterLoginAction();
     initAccount();
     navigate();
-    refreshConnectionStatus({ silent: true }).then(({ changed } = {}) => {
-      if (changed) navigate();
-    });
+    await refreshConnectionStatus({ silent: true, rerender: true });
     refreshApolloUsage();
     if (!state.profile) openOnboarding(1);
 
