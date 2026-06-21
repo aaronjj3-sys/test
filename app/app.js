@@ -76,6 +76,10 @@ const knockLimit = () => (state.plan === "unlimited" ? 9999 : state.plan === "pr
 const saveApolloUsage = () => save("knock_apollo_usage", state.apolloUsage);
 const inboxComposerAttachments = new Map();
 let replyToolbarSelectionHandler = null;
+const GMAIL_STYLE_AUTO_SESSION_KEY = "knock_gmail_style_auto_checked";
+const GMAIL_STYLE_REFRESH_CADENCE_DAYS = 7;
+const GMAIL_STYLE_AUTO_RETRY_MS = 12 * 60 * 60 * 1000;
+const GMAIL_STYLE_WEEK_MS = GMAIL_STYLE_REFRESH_CADENCE_DAYS * 24 * 60 * 60 * 1000;
 state.connections = {
   google: Boolean(state.connections.google || state.connections.gmail || state.connections.gcal),
   outlook: Boolean(state.connections.outlook),
@@ -1490,6 +1494,7 @@ function openDoorDraft(d) {
   openModal(`
     <h2 style="font-size:1.2rem">Review knock</h2>
     <p class="sub">To ${esc(d.name)} · ${esc(d.title || "")}${d.companyName ? " at " + esc(d.companyName) : ""}</p>
+    ${gmailVoiceBadgeHTML()}
     <label>Subject</label>
     <input type="text" id="dd-subject" value="${esc(d.draft?.subject || "")}">
     <label>Email</label>
@@ -3408,6 +3413,7 @@ function openSuggestedReply(m) {
   openModal(`
     <h2>Suggested reply</h2>
     <p class="sub">To ${esc(m.name || "them")}${m.company ? " · " + esc(m.company) : ""}${summaryText(m) ? `<br>Scout's read: <b>${esc(summaryText(m))}</b>` : ""}</p>
+    ${gmailVoiceBadgeHTML()}
     ${m.calendarLink ? `<p class="meetlink">${icon("cal")} Google Calendar created · <a href="${esc(m.calendarLink)}" target="_blank" rel="noopener">${esc(m.calendarLink)}</a></p>` : ""}
     <label>Subject</label><input type="text" id="sr-subject" value="${esc(noEmDash(subject))}">
     <label>Reply</label><textarea id="sr-body" rows="8">${esc(noEmDash(body))}</textarea>
@@ -3624,22 +3630,142 @@ function gmailLearnButtonLabel(p = state.profile) {
   return p?.gmailStyleLearnedAt ? "Re-learn from Gmail" : "Learn from Gmail";
 }
 
-async function learnStyleFromGmail(btn = null) {
-  if (!state.profile) {
-    toast("Build your profile first, then Scout can learn your voice.");
-    return;
-  }
+function gmailVoiceBadgeHTML() {
+  return state.profile?.styleProfile && state.profile?.gmailStyleLearnedAt
+    ? `<p class="voice-badge">Writing voice: Gmail-learned</p>`
+    : "";
+}
 
-  const realUserId = await requireRealUserId("learn from Gmail");
+function gmailStyleCadenceDays(p = state.profile) {
+  return GMAIL_STYLE_REFRESH_CADENCE_DAYS;
+}
+
+function addDaysISO(value, days) {
+  const base = Date.parse(value || "");
+  const date = Number.isFinite(base) ? new Date(base) : new Date();
+  date.setDate(date.getDate() + days);
+  return date.toISOString();
+}
+
+function formatStyleDate(value) {
+  const date = new Date(value || "");
+  if (Number.isNaN(date.getTime())) return "soon";
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function friendlyGmailStyleReason(error) {
+  const value = String(error || "").trim();
+  const reasons = {
+    google_not_connected: "Google is disconnected",
+    not_enough_sent_email: "not enough sent emails",
+    real_user_required: "sign in required",
+    learn_style_failed: "Gmail style learning failed",
+    cooldown: "cooldown",
+  };
+  return reasons[value] || value || "refresh failed";
+}
+
+function gmailStyleNextAutoRefreshAt(p = state.profile) {
+  if (p?.gmailStyleNextAutoRefreshAt) return p.gmailStyleNextAutoRefreshAt;
+  if (!p?.gmailStyleLearnedAt) return "";
+  return addDaysISO(p.gmailStyleLearnedAt, gmailStyleCadenceDays(p));
+}
+
+function gmailStyleAutoStatus(p = state.profile) {
+  if (!p?.gmailStyleAutoRefresh) return "Auto-refresh is off.";
+  if (!p.gmailStyleLearnedAt) return "Next refresh: when you open Knock.";
+  return `Next refresh: ${formatStyleDate(gmailStyleNextAutoRefreshAt(p))}`;
+}
+
+function gmailStyleDueForAutoRefresh() {
+  const p = state.profile;
+  if (!p?.gmailStyleAutoRefresh) return false;
+
+  try {
+    if (sessionStorage.getItem(GMAIL_STYLE_AUTO_SESSION_KEY) === "1") return false;
+  } catch {}
+
+  const now = Date.now();
+  const next = Date.parse(p.gmailStyleNextAutoRefreshAt || "");
+  const learned = Date.parse(p.gmailStyleLearnedAt || "");
+  const lastAttempt = Date.parse(p.gmailStyleLastAutoAttemptAt || "");
+
+  if (Number.isFinite(lastAttempt) && now - lastAttempt < GMAIL_STYLE_AUTO_RETRY_MS) return false;
+  if (Number.isFinite(next)) return now >= next;
+  if (!Number.isFinite(learned)) return true;
+  return now - learned >= GMAIL_STYLE_WEEK_MS;
+}
+
+function noteGmailStyleFailure(error, { mode = "manual" } = {}) {
+  if (!state.profile || mode !== "auto") return;
+  state.profile.gmailStyleLastAutoAttemptAt = new Date().toISOString();
+  state.profile.gmailStyleLastError = friendlyGmailStyleReason(error);
+  saveProfile();
+}
+
+function applyGmailStyleLearned(data = {}, { mode = "manual" } = {}) {
+  if (!state.profile || !data.styleProfile) return;
+  const learnedAt = new Date().toISOString();
+  const cadenceDays = GMAIL_STYLE_REFRESH_CADENCE_DAYS;
+  state.profile.styleProfile = data.styleProfile;
+  state.profile.gmailStyleLearnedAt = learnedAt;
+  state.profile.gmailStyleMessageCount = data.messageCount || 0;
+  state.profile.gmailStyleProviderEmail = data.providerEmail || "";
+  state.profile.gmailStyleRefreshCadenceDays = cadenceDays;
+  state.profile.gmailStyleNextAutoRefreshAt = addDaysISO(learnedAt, cadenceDays);
+  state.profile.gmailStyleLastError = null;
+  if (mode === "auto") state.profile.gmailStyleLastAutoAttemptAt = learnedAt;
+  saveProfile();
+}
+
+async function maybeAutoRefreshGmailStyle() {
+  if (!state.profile || !gmailStyleDueForAutoRefresh()) return;
+
+  try {
+    sessionStorage.setItem(GMAIL_STYLE_AUTO_SESSION_KEY, "1");
+  } catch {}
+
+  const realUserId = await realUserIdFromAuth();
   if (!realUserId) return;
 
   const status = await refreshConnectionStatus({ silent: true, rerender: false });
+  if (!status.google && !state.connections?.google) return;
+
+  console.log("[gmail-style auto-refresh] starting");
+  await learnStyleFromGmail({ mode: "auto", silent: true });
+}
+
+function gmailStyleLearnOptions(input = {}) {
+  if (!input) input = {};
+  if (input && input.nodeType === 1) return { btn: input, mode: "manual", silent: false };
+  return {
+    btn: input.btn || null,
+    mode: input.mode === "auto" ? "auto" : "manual",
+    silent: Boolean(input.silent),
+  };
+}
+
+async function learnStyleFromGmail(options = {}) {
+  const { btn, mode, silent } = gmailStyleLearnOptions(options);
+  if (!state.profile) {
+    if (!silent) toast("Build your profile first, then Scout can learn your voice.");
+    return { ok: false, error: "profile_missing" };
+  }
+
+  const realUserId = mode === "auto" ? await realUserIdFromAuth() : await requireRealUserId("learn from Gmail");
+  if (!realUserId) {
+    noteGmailStyleFailure("real_user_required", { mode });
+    return { ok: false, error: "real_user_required" };
+  }
+
+  const status = await refreshConnectionStatus({ silent: true, rerender: false });
   if (!status.google && !state.connections?.google) {
-    toast("Connect Google first.");
+    noteGmailStyleFailure("google_not_connected", { mode });
+    if (!silent) toast("Connect Google first.");
     const route = location.hash.replace("#", "") || "dashboard";
-    if (route === "settings") renderSettings();
-    if (route === "profile") renderProfile();
-    return;
+    if (!silent && route === "settings") renderSettings();
+    if (!silent && route === "profile") renderProfile();
+    return { ok: false, error: "google_not_connected" };
   }
 
   const oldText = btn?.textContent || "";
@@ -3652,32 +3778,37 @@ async function learnStyleFromGmail(btn = null) {
     const res = await fetch("/api/gmail/learn-style", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: realUserId, maxMessages: 25 }),
+      body: JSON.stringify({ userId: realUserId, maxMessages: 25, mode }),
     });
     const data = await res.json().catch(() => ({}));
+    if (data.skipped) {
+      if (mode === "auto" && data.reason) noteGmailStyleFailure(data.reason, { mode });
+      return data;
+    }
     if (data.error === "google_not_connected") {
-      toast("Connect Google first.");
-      return;
+      noteGmailStyleFailure(data.error, { mode });
+      if (!silent) toast("Connect Google first.");
+      return data;
     }
     if (data.error === "not_enough_sent_email") {
-      toast("Not enough sent emails to learn from yet. Add writing samples instead.");
-      return;
+      noteGmailStyleFailure(data.error, { mode });
+      if (!silent) toast("Not enough sent emails to learn from yet. Add writing samples instead.");
+      return data;
     }
     if (!res.ok || !data.ok || !data.styleProfile) throw new Error(data.error || `Learn failed (${res.status})`);
 
-    state.profile.styleProfile = data.styleProfile;
-    state.profile.gmailStyleLearnedAt = new Date().toISOString();
-    state.profile.gmailStyleMessageCount = data.messageCount || 0;
-    state.profile.gmailStyleProviderEmail = data.providerEmail || "";
-    saveProfile();
-    toast(`Scout learned your voice from ${data.messageCount || 0} sent emails.`);
+    applyGmailStyleLearned(data, { mode });
+    if (!silent) toast(`Scout learned your voice from ${data.messageCount || 0} sent emails.`);
 
     const route = location.hash.replace("#", "") || "dashboard";
     if (route === "profile") renderProfile();
     else if (route === "settings") renderSettings();
+    return data;
   } catch (err) {
     console.warn("[gmail/learn-style] failed", err?.message || err);
-    toast("Could not learn from Gmail yet.");
+    noteGmailStyleFailure(err?.message || "learn_style_failed", { mode });
+    if (!silent) toast("Could not learn from Gmail yet.");
+    return { ok: false, error: err?.message || "learn_style_failed" };
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -4026,7 +4157,7 @@ function renderProfile() {
       toast("Voice updated");
     });
   });
-  $("#learn-gmail-profile", view)?.addEventListener("click", (e) => learnStyleFromGmail(e.currentTarget));
+  $("#learn-gmail-profile", view)?.addEventListener("click", (e) => learnStyleFromGmail({ btn: e.currentTarget }));
 
   /* story inline edit */
   $('[data-edit="story"]', view).addEventListener("click", () => {
@@ -4294,6 +4425,8 @@ function renderSettings() {
   const isDev = (window.knockAuth?.mode || "dev") === "dev";
   const p = state.profile || {};
   const learnedMeta = learnedStyleMeta(p);
+  const autoRefreshOn = Boolean(p.gmailStyleAutoRefresh);
+  const lastStyleError = p.gmailStyleLastError ? friendlyGmailStyleReason(p.gmailStyleLastError) : "";
   view.innerHTML = `<div class="viewwrap">
     <div class="vh"><h1>Settings</h1><p>How Scout behaves in other people's inboxes.</p></div>
     <div class="settings-grid">
@@ -4332,12 +4465,21 @@ function renderSettings() {
         <h3>Voice learning</h3>
         <p class="setcopy">Scout can learn your writing style from your sent Gmail messages. It analyzes tone and phrasing only, not personal facts.</p>
         <div class="voicelearn voicelearn--settings">
-          <div>
+          <div class="voicelearn__text">
             <strong>${p.gmailStyleLearnedAt ? "Gmail style learned" : "Manual Gmail learning"}</strong>
             <small>${learnedMeta ? esc(learnedMeta) : "We only analyze sent email writing style. We do not save raw email bodies."}</small>
           </div>
-          <button class="btn btn--sm ${state.connections.google ? "btn--accent" : "btn--paper"}" id="learn-gmail-settings">${esc(gmailLearnButtonLabel(p))}</button>
+          <button class="btn btn--sm voicelearn__button ${state.connections.google ? "btn--accent" : "btn--paper"}" id="learn-gmail-settings">${esc(gmailLearnButtonLabel(p))}</button>
         </div>
+        <label class="voice-auto" for="gmail-style-auto">
+          <span>
+            <strong>Auto-refresh weekly</strong>
+            <small>When on, Scout refreshes your writing style from sent Gmail at most once every 7 days when you open Knock. We do not save raw email bodies.</small>
+          </span>
+          <span class="switch"><input type="checkbox" id="gmail-style-auto" ${autoRefreshOn ? "checked" : ""}><i></i></span>
+        </label>
+        <p class="voice-status">${esc(gmailStyleAutoStatus(p))}</p>
+        ${lastStyleError ? `<p class="voice-warning">Last auto-refresh skipped: ${esc(lastStyleError)}</p>` : ""}
         ${styleSummaryHTML(p.styleProfile)}
       </div>
       <div class="pcard">
@@ -4368,6 +4510,7 @@ function renderSettings() {
 
   $$('.switch input', view).forEach((sw) =>
     sw.addEventListener("change", () => {
+      if (!sw.dataset.k) return;
       if (sw.dataset.k) { state.autonomy[sw.dataset.k] = sw.checked; save("knock_autonomy", state.autonomy); schedulePersistProfile(); }
       toast(sw.checked ? "On" : "Off");
     }));
@@ -4375,7 +4518,23 @@ function renderSettings() {
   $("#set-sendprefs", view).addEventListener("click", () => openSendPrefs(renderSettings));
   $("#set-feedback", view).addEventListener("click", openFeedback);
   $("#set-connections", view).addEventListener("click", openConnections);
-  $("#learn-gmail-settings", view)?.addEventListener("click", (e) => learnStyleFromGmail(e.currentTarget));
+  $("#learn-gmail-settings", view)?.addEventListener("click", (e) => learnStyleFromGmail({ btn: e.currentTarget }));
+  $("#gmail-style-auto", view)?.addEventListener("change", (e) => {
+    if (!state.profile) {
+      e.currentTarget.checked = false;
+      toast("Build your profile first, then Scout can refresh your voice.");
+      return;
+    }
+    const enabled = Boolean(e.currentTarget.checked);
+    state.profile.gmailStyleAutoRefresh = enabled;
+    state.profile.gmailStyleRefreshCadenceDays = GMAIL_STYLE_REFRESH_CADENCE_DAYS;
+    if (enabled && state.profile.gmailStyleLearnedAt && !state.profile.gmailStyleNextAutoRefreshAt) {
+      state.profile.gmailStyleNextAutoRefreshAt = gmailStyleNextAutoRefreshAt(state.profile);
+    }
+    saveProfile();
+    renderSettings();
+    toast(enabled ? "Auto-refresh weekly is on." : "Auto-refresh is off.");
+  });
   $("#pro-redeem", view)?.addEventListener("click", redeemProCode);
   $("#set-logout", view).addEventListener("click", () => window.knockAuth.signOut());
   $("#set-reset", view).addEventListener("click", () => {
@@ -5007,6 +5166,14 @@ async function finishOnboarding() {
     education: parsed.education || [],
     extraContext: parsed.extraContext || "",
     styleProfile: null,
+    gmailStyleAutoRefresh: false,
+    gmailStyleRefreshCadenceDays: GMAIL_STYLE_REFRESH_CADENCE_DAYS,
+    gmailStyleLearnedAt: "",
+    gmailStyleLastAutoAttemptAt: "",
+    gmailStyleNextAutoRefreshAt: "",
+    gmailStyleProviderEmail: "",
+    gmailStyleMessageCount: 0,
+    gmailStyleLastError: null,
     goals: OB.industries || [],
     updatedAt: new Date().toISOString(),
   };
@@ -5213,6 +5380,7 @@ $("#acct-tour")?.addEventListener("click", () => { $("#acct-menu").hidden = true
     await refreshConnectionStatus({ silent: true });
     initAccount();
     navigate();
+    maybeAutoRefreshGmailStyle();
     refreshApolloUsage();
     if (!state.profile) openOnboarding(1);
 

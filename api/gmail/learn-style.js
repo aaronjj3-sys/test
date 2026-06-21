@@ -1,5 +1,5 @@
 /* POST /api/gmail/learn-style
-   Manually learns writing style from the user's own sent Gmail messages.
+   Learns writing style from the user's own sent Gmail messages.
    The route analyzes style only: raw Gmail bodies are never stored, returned,
    or logged. */
 
@@ -110,9 +110,13 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ ok: false, error: "POST only" });
 
   const { userId } = req.body || {};
+  const mode = String(req.body?.mode || "manual");
   const maxMessages = Math.min(Math.max(Number(req.body?.maxMessages || MAX_MESSAGES), 1), MAX_MESSAGES);
   if (!validUuid(userId)) {
     return res.status(400).json({ ok: false, error: "real_user_required" });
+  }
+  if (!["manual", "auto"].includes(mode)) {
+    return res.status(400).json({ ok: false, error: "invalid_mode" });
   }
 
   try {
@@ -152,6 +156,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       ok: true,
+      mode,
       providerEmail,
       messageCount: samples.length,
       styleProfile: normalizeStyleProfile(result.styleProfile),
