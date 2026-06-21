@@ -125,4 +125,21 @@ for (const dir of optionalStaticDirs) {
   }
 }
 
+const appIndexOut = path.join(appOutDir, "index.html");
+const appIndexHtml = readFileSync(appIndexOut, "utf8");
+const badAppAssetPaths = [
+  'src="app/',
+  'href="app/',
+  'src="../',
+  'href="../',
+  "app/vendor/",
+  "main.js",
+];
+const foundBadAppAssetPaths = badAppAssetPaths.filter((snippet) => appIndexHtml.includes(snippet));
+if (foundBadAppAssetPaths.length) {
+  console.error("Static Knock build check failed. public/app/index.html contains unsafe app asset paths:");
+  for (const snippet of foundBadAppAssetPaths) console.error(`- ${snippet}`);
+  process.exit(1);
+}
+
 console.log("Static Knock build ready for Vercel");

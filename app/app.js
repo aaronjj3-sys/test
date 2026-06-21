@@ -279,26 +279,45 @@ const noEmDash = (s) => String(s ?? "").replace(/\s+—\s+/g, ", ").replace(/—
 
 /* the authenticated user id (Supabase uuid, or "dev" in dev mode) */
 const userId = () => window.knockAuth?.user?.id || "dev";
-const isRealUuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i.test(value || "");
+
+function isRealUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value || "");
+}
+
 async function realUserIdFromAuth() {
-  const auth = window.knockAuth;
-  if (isRealUuid(auth?.user?.id)) return auth.user.id;
-  if (!auth?.client) return "";
   try {
-    const { data } = await auth.client.auth.getUser();
-    if (isRealUuid(data?.user?.id)) {
-      const name = data.user.user_metadata?.full_name || data.user.email || auth.user?.name || "";
-      auth.user = {
-        ...(auth.user || {}),
-        id: data.user.id,
-        email: data.user.email || auth.user?.email || "",
-        name,
-        avatar: data.user.user_metadata?.avatar_url || auth.user?.avatar,
-        initials: (name || data.user.email || "?").split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((p) => p[0].toUpperCase()).join(""),
-      };
-      return data.user.id;
+    if (window.knockAuth?.ready) await window.knockAuth.ready;
+  } catch {}
+
+  let id = window.knockAuth?.user?.id || "";
+
+  if (!isRealUuid(id) && window.knockAuth?.client?.auth?.getSession) {
+    try {
+      const { data } = await window.knockAuth.client.auth.getSession();
+      if (data?.session?.user?.id) {
+        id = data.session.user.id;
+        window.knockAuth.user = {
+          ...(window.knockAuth.user || {}),
+          id: data.session.user.id,
+          email: data.session.user.email || window.knockAuth.user?.email || "",
+          name: data.session.user.user_metadata?.full_name || data.session.user.email || window.knockAuth.user?.name || "",
+        };
+      }
+    } catch (err) {
+      console.warn("[auth] could not read live Supabase session", err?.message || err);
     }
-  } catch { /* session refresh failed; caller shows a clean login prompt */ }
+  }
+
+  return isRealUuid(id) ? id : "";
+}
+
+async function requireRealUserId(reason = "continue") {
+  const id = await realUserIdFromAuth();
+
+  if (id) return id;
+
+  toast(`Sign in to Knock first to ${reason}.`);
+  window.knockAuth?.openLogin?.();
   return "";
 }
 
@@ -523,62 +542,132 @@ function saveConnections() {
   save("knock_connections", state.connections);
 }
 
-/* Starts an OAuth connect flow and returns the user to the view they were
-   on (inbox, dashboard, settings...) when the provider redirects back. */
-function connectProvider(provider) {
-  const user = window.knockAuth?.user || {};
-  if ((window.knockAuth?.mode || "dev") !== "supabase" || !user.id || user.id === "dev") {
-    toast("Connect Google requires Supabase login. Configure Supabase, log in, then try again");
+/* Server is the source of truth for Google. Supabase login identifies the
+   Knock user; Google OAuth grants Gmail/Calendar permission and can be a
+   different email account. */
+async function refreshConnectionStatus({ silent = true, rerender = false } = {}) {
+  const realUserId = await realUserIdFromAuth();
+
+  if (!realUserId) {
+    state.connections = {
+      ...(state.connections || {}),
+      google: false,
+    };
+    saveConnections?.();
+    return { ok: false, google: false, reason: "not_signed_in" };
+  }
+
+  try {
+    const res = await fetch(`/api/connections/status?user_id=${encodeURIComponent(realUserId)}`);
+    const data = await res.json().catch(() => ({}));
+
+    const google = Boolean(
+      data?.connections?.google?.connected ||
+      data?.connections?.google === true ||
+      data?.google === true
+    );
+
+    state.connections = {
+      ...(state.connections || {}),
+      google,
+    };
+
+    if (typeof saveConnections === "function") {
+      saveConnections();
+    } else {
+      localStorage.setItem("knock_connections", JSON.stringify(state.connections));
+    }
+
+    if (google) releaseWaitingGmailMessages();
+
+    if (rerender) {
+      const route = location.hash.replace("#", "") || "dashboard";
+      if (route === "settings") renderSettings();
+      else if (route === "dashboard") renderDoorsQueue();
+      else updateChrome();
+    }
+
+    return { ok: Boolean(data?.ok), google, raw: data };
+  } catch (err) {
+    if (!silent) toast("Could not check Google connection");
+    console.warn("[connections/status] failed", err?.message || err);
+    return { ok: false, google: false, error: err?.message || String(err) };
+  }
+}
+
+async function connectGoogle() {
+  const realUserId = await requireRealUserId("connect Google");
+  if (!realUserId) return;
+
+  const status = await refreshConnectionStatus({ silent: true, rerender: true });
+
+  if (status.google || state.connections?.google) {
+    toast("Google is already connected.");
+    releaseWaitingGmailMessages();
     return;
   }
+
+  const email = window.knockAuth?.user?.email || state.profile?.email || "";
+
   const params = new URLSearchParams({
-    user_id: user.id,
-    user_email: user.email || "",
-    return_to: `${location.pathname || "/app/index.html"}${location.hash || "#dashboard"}`,
+    user_id: realUserId,
+    user_email: email,
+    return_to: "/app/#settings",
   });
-  location.href = `/api/${provider}/connect?${params.toString()}`;
-}
-const connectGoogle = () => connectProvider("google");
 
-function handleConnectReturn() {
-  const url = new URL(location.href);
-  let touched = false;
-  for (const provider of ["google"]) {
-    const connected = url.searchParams.get(provider) === "connected";
-    const error = url.searchParams.get(`${provider}_error`);
-    if (connected) {
-      state.connections[provider] = true;
-      saveConnections();
-      toast("Google connected");
-    } else if (error) {
-      toast(`Google connect failed: ${esc(error)}`);
-    }
-    touched = touched || connected || Boolean(error);
-  }
-  if (touched) {
-    history.replaceState(null, "", `${location.pathname}${location.hash || "#dashboard"}`);
-  }
+  console.log("[connectGoogle redirect]", {
+    userId: realUserId,
+    email,
+  });
+
+  location.href = `/api/google/connect?${params.toString()}`;
 }
 
-/* Server is the source of truth for connections: sync on boot so the UI
-   shows what's actually connected, on every page and every device. */
-async function syncConnections() {
-  const user = window.knockAuth?.user;
-  if (!user?.id || user.id === "dev") return;
-  try {
-    const res = await fetch(`/api/connections/status?user_id=${encodeURIComponent(user.id)}`);
-    const data = await res.json();
-    if (!data.persisted) return;
-    let changed = false;
-    for (const provider of ["google", "outlook"]) {
-      const isConnected = Boolean(data.connections[provider]?.connected);
-      if (state.connections[provider] !== isConnected) {
-        state.connections[provider] = isConnected;
-        changed = true;
-      }
+async function handleGoogleConnectReturn() {
+  const params = new URLSearchParams(location.search || "");
+  const connected = params.get("google") === "connected";
+  const error = params.get("google_error") || params.get("error");
+
+  if (!connected && !error) return;
+
+  if (error) {
+    toast(`Google connect failed: ${error}`);
+  }
+
+  await refreshConnectionStatus({ silent: true, rerender: true });
+
+  if (connected && state.connections?.google) {
+    toast("Google connected.");
+    releaseWaitingGmailMessages();
+  }
+
+  history.replaceState({}, "", "/app/#settings");
+}
+
+function releaseWaitingGmailMessages() {
+  if (!state.connections?.google) return;
+
+  let released = 0;
+
+  for (const m of state.messages || []) {
+    if (m.status === "waiting_gmail") {
+      m.status = "queued";
+      m.updatedAt = new Date().toISOString();
+      released++;
     }
-    if (changed) { saveConnections(); navigate(); }
-  } catch { /* offline or dev server without Supabase; keep local state */ }
+  }
+
+  if (!released) return;
+
+  saveLive();
+  updateChrome();
+
+  const route = location.hash.replace("#", "") || "dashboard";
+  if (route === "dashboard") renderDoorsQueue();
+  if (route === "tracker") renderTracker();
+  if (route === "inbox") renderInbox();
+
+  processSendQueue();
 }
 
 async function disconnectProvider(provider) {
@@ -2017,23 +2106,32 @@ async function processSingleSend(m) {
     setMsgStatus(m, "failed");
     return "failed";
   }
+  const realUserId = await requireRealUserId("send Gmail");
+  if (!realUserId) return "stop";
   setMsgStatus(m, "sending");
   try {
     const savedIds = m.attachmentIds || attachmentIdsForDoor(d);
     const oneOffs = m.attachments || [];
     m.sentAttachments = sentAttachmentMetadata({ ids: savedIds, oneOffs });
+    const message = {
+      id: m.id, doorId: m.doorId, campaignId: m.campaignId,
+      to: m.to, toName: m.toName || m.name || d?.name || "",
+      subject: noEmDash(m.subject), body: noEmDash(m.body),
+      attachmentIds: savedIds,
+      attachments: oneOffs,
+    };
+    console.log("[gmail/send payload]", {
+      userId: realUserId,
+      messageId: message.id,
+      to: message.to,
+      subject: message.subject,
+    });
     const res = await fetch("/api/gmail/send", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        userId: userId(),
-        message: {
-          id: m.id, doorId: m.doorId, campaignId: m.campaignId,
-          to: m.to, toName: m.toName || m.name || d?.name || "",
-          subject: noEmDash(m.subject), body: noEmDash(m.body),
-          attachmentIds: savedIds,
-          attachments: oneOffs,
-        },
+        userId: realUserId,
+        message,
         scheduleAt: m.scheduleAt || undefined,
       }),
     });
@@ -2550,21 +2648,30 @@ async function sendThreadReply(m, { subject, body, bodyHtml = "", attachments = 
   const safeHtml = bodyHtml ? sanitizeRichHtml(bodyHtml) : "";
   if (!m.to) throw new Error("No verified email found. Apollo enrichment did not return one.");
   if (!replySubject || !replyBody) throw new Error("Reply needs a subject and body.");
+  const realUserId = await requireRealUserId("send Gmail");
+  if (!realUserId) return null;
+  const message = {
+    id: m.id, doorId: m.doorId, campaignId: m.campaignId,
+    to: m.to, toName: m.name || d?.name || "",
+    subject: replySubject,
+    body: replyBody,
+    bodyHtml: safeHtml,
+    kind,
+    threadId: m.gmailThreadId,
+    attachments,
+  };
+  console.log("[gmail/send payload]", {
+    userId: realUserId,
+    messageId: message.id,
+    to: message.to,
+    subject: message.subject,
+  });
   const res = await fetch("/api/gmail/send", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      userId: userId(),
-      message: {
-        id: m.id, doorId: m.doorId, campaignId: m.campaignId,
-        to: m.to, toName: m.name || d?.name || "",
-        subject: replySubject,
-        body: replyBody,
-        bodyHtml: safeHtml,
-        kind,
-        threadId: m.gmailThreadId,
-        attachments,
-      },
+      userId: realUserId,
+      message,
     }),
   });
   const data = await res.json().catch(() => ({}));
@@ -2815,12 +2922,16 @@ function wireReplyComposer(m) {
     if (!body) { toast("Write a reply first"); return; }
     btn.disabled = true; btn.textContent = "Sending...";
     try {
-      await sendThreadReply(m, {
+      const sent = await sendThreadReply(m, {
         subject: `Re: ${m.subject || "quick question"}`,
         body,
         bodyHtml,
         attachments: inboxComposerAttachments.get(m.id) || [],
       });
+      if (!sent) {
+        btn.disabled = false; btn.textContent = "Send reply";
+        return;
+      }
       inboxComposerAttachments.delete(m.id);
       toast("Reply sent. Knock is watching the thread");
       updateInboxThread(m, { forceBottom: true });
@@ -3136,12 +3247,16 @@ function openSuggestedReply(m) {
     try {
       const replySubject = noEmDash($("#sr-subject").value.trim());
       const replyBody = noEmDash($("#sr-body").value.trim());
-      await sendThreadReply(m, {
+      const sent = await sendThreadReply(m, {
         subject: replySubject,
         body: replyBody,
         bodyHtml: esc(replyBody).replace(/\n/g, "<br>"),
         kind: replyKind,
       });
+      if (!sent) {
+        btn.disabled = false; btn.textContent = "Send reply";
+        return;
+      }
       closeModal();
       toast("Reply sent. Scout keeps watching the thread");
       if ((location.hash.replace("#", "") || "dashboard") === "inbox") updateInboxThread(m, { forceBottom: true });
@@ -4799,13 +4914,13 @@ $("#acct-tour")?.addEventListener("click", () => { $("#acct-menu").hidden = true
     if (/access_token|refresh_token|error_description/.test(location.hash)) {
       history.replaceState(null, "", location.pathname + "#dashboard");
     }
-    handleConnectReturn();
     /* pull the profile and synced app state back from Supabase before
        deciding on onboarding, so a new device starts with everything */
     await hydrateFromSupabase();
+    await handleGoogleConnectReturn();
+    await refreshConnectionStatus({ silent: true });
     initAccount();
     navigate();
-    syncConnections();
     refreshApolloUsage();
     if (!state.profile) openOnboarding(1);
 

@@ -16,6 +16,10 @@ function validUuid(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value || "");
 }
 
+function safeUserIdDiagnostic(userId) {
+  return userId ? `${String(userId).slice(0, 8)}...` : null;
+}
+
 /* Update the existing row when the client passed a DB id; insert otherwise.
    Returns the message row id we ended up writing (or null if DB write failed). */
 function requestOrigin(req) {
@@ -153,7 +157,11 @@ export default async function handler(req, res) {
 
   const connection = await getGoogleConnection(userId);
   if (!connection) {
-    return res.status(412).json({ ok: false, error: "google_not_connected" });
+    return res.status(412).json({
+      ok: false,
+      error: "google_not_connected",
+      userIdReceived: safeUserIdDiagnostic(userId),
+    });
   }
 
   const dbReady = supabaseConfigured();
@@ -277,7 +285,11 @@ export default async function handler(req, res) {
   } catch (err) {
     console.error("Gmail send failed:", err.message);
     if (err.message === "google_not_connected") {
-      return res.status(412).json({ ok: false, error: "google_not_connected" });
+      return res.status(412).json({
+        ok: false,
+        error: "google_not_connected",
+        userIdReceived: safeUserIdDiagnostic(userId),
+      });
     }
     if (dbReady && validUuid(message.id)) {
       await sbUpdate(
